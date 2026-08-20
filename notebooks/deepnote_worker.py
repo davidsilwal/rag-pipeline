@@ -5,21 +5,108 @@ notebooks/deepnote_worker.py
 DEEPNOTE GPU WORKER PIPELINE — COMPLETE READY-TO-RUN NOTEBOOK / SCRIPT
 ==============================================================================
 Designed for Deepnote (Student / Team) & Google Colab environments.
-Connects to VPS PostgreSQL, executes Discovery -> Extraction -> Embedding -> 
+Connects to VPS PostgreSQL, executes Discovery -> Extraction -> Embedding ->
 Clustering -> Consensus -> Markdown Wiki Compilation -> pgvector Indexing.
 ==============================================================================
 """
 
+# =============================================================================
+# 0. COLAB / DEEPNOTE ENVIRONMENT SETUP
+# =============================================================================
+# This section must come FIRST to set up the environment correctly
 import os
 import sys
-import subprocess
-import asyncio
 import time
+import asyncio
+import subprocess
 from pathlib import Path
 
-# ==============================================================================
+# Try to import google.colab (only available in Colab)
+try:
+    import google.colab
+    HAS_COLAB = True
+except Exception:
+    HAS_COLAB = False
+
+def _setup_colab_environment():
+    """Set up the environment for Colab/Deepnote: clone repo if needed, fix paths."""
+    # Check if we're in Colab
+    IN_COLAB = HAS_COLAB
+    
+    # Check if we're in Deepnote
+    IN_DEEPNOTE = os.path.exists("/work")
+    
+    if IN_COLAB:
+        print("🔧 Detected Google Colab environment")
+        # In Colab, we expect the repo to be cloned or mounted
+        repo_dir = Path("/content/rag-pipeline")
+        if not repo_dir.exists():
+            print("📥 Cloning repository...")
+            # Use HTTPS for public access; for private repos, mount or use token
+            subprocess.check_call([
+                "git", "clone", 
+                "https://github.com/davidsilwal/rag-pipeline.git", 
+                str(repo_dir)
+            ])
+        # Change to the repo directory
+        os.chdir(repo_dir)
+        # Add repo to Python path
+        if str(repo_dir) not in sys.path:
+            sys.path.insert(0, str(repo_dir))
+        print(f"📁 Working directory set to: {repo_dir}")
+        return repo_dir
+    
+    elif IN_DEEPNOTE:
+        print("🔧 Detected Deepnote environment")
+        repo_dir = Path("/work").resolve()
+        if not (repo_dir / "workers").exists():
+            # Fallback: maybe the repo is at a different location
+            # Try current directory or parent
+            cwd = Path.cwd()
+            if (cwd / "workers").exists():
+                repo_dir = cwd
+            else:
+                # Try to find the repo by looking for workers/ upwards
+                for parent in [cwd] + list(cwd.parents):
+                    if (parent / "workers").exists():
+                        repo_dir = parent
+                        break
+        if str(repo_dir) not in sys.path:
+            sys.path.insert(0, str(repo_dir))
+        print(f"📁 Working directory set to: {repo_dir}")
+        return repo_dir
+    
+    else:
+        # Local environment: assume we're already in the repo
+        repo_dir = Path.cwd()
+        if (repo_dir / "workers").exists():
+            # We're inside the repo
+            pass
+        elif (Path(".").parent / "rag-pipeline" / "workers").exists():
+            # We're one level inside
+            repo_dir = (Path(".").parent / "rag-pipeline").resolve()
+        else:
+            # Try to clone
+            repo_dir = Path("/content/rag-pipeline")
+            if not repo_dir.exists():
+                subprocess.check_call([
+                    "git", "clone", 
+                    "https://github.com/davidsilwal/rag-pipeline.git", 
+                    str(repo_dir)
+                ])
+            repo_dir = repo_dir.resolve()
+        
+        if str(repo_dir) not in sys.path:
+            sys.path.insert(0, str(repo_dir))
+        print(f"📁 Working directory set to: {repo_dir}")
+        return repo_dir
+
+# Run the setup
+REPO_PATH = _setup_colab_environment()
+
+# =============================================================================
 # 1. ENVIRONMENT CONFIGURATION & SECRETS
-# ==============================================================================
+# =============================================================================
 # Set your VPS connection details here, or in Deepnote's Environment Variables tab
 VPS_HOST = os.getenv("VPS_PUBLIC_HOST", "YOUR_VPS_IP_OR_DOMAIN")
 os.environ["VPS_PUBLIC_HOST"] = VPS_HOST
@@ -27,7 +114,7 @@ os.environ["CONTROL_API_URL"] = os.getenv("CONTROL_API_URL", f"https://{VPS_HOST
 os.environ["CONTROL_API_KEY"] = os.getenv("CONTROL_API_KEY", "YOUR_CONTROL_API_KEY")
 os.environ["DATABASE_URL"] = os.getenv(
     "DATABASE_URL",
-    f"postgresql://gpu_worker:YOUR_PASSWORD@{VPS_HOST}:5432/knowledge_base?sslmode=require"
+    f"postgresql://gpu_worker:***@{VPS_HOST}:5432/knowledge_base?sslmode=require"
 )
 os.environ["LOCAL_LLM_MODEL"] = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 os.environ["LOCAL_LLM_API_BASE"] = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8000/v1")
@@ -43,11 +130,10 @@ os.environ["ONEDRIVE_DRIVE_ID"] = os.getenv("ONEDRIVE_DRIVE_ID", "")
 CONTINUOUS_MODE = False
 POLL_INTERVAL_SECONDS = 30
 
-
-# ==============================================================================
+# =============================================================================
 # 2. AUTOMATIC DEPENDENCY SETUP
-# ==============================================================================
-print("📦 [1/5] Checking and installing GPU dependencies...")
+# =============================================================================
+print("\n📦 [1/5] Checking and installing GPU dependencies...")
 REQUIRED_PACKAGES = [
     "asyncpg",
     "FlagEmbedding",
@@ -77,27 +163,13 @@ except ImportError:
 
 
 # =============================================================================
-# 3. WORKSPACE & REPOSITORY PATH SETUP
+# 3. REPOSITORY ROOT CONFIRMATION
 # =============================================================================
-REPO_PATH = Path("/work").resolve()  # Deepnote default root
-if not (REPO_PATH / "workers").exists():
-    # Fallback: use current working directory if it contains the repo
-    cwd = Path.cwd().resolve()
-    if (cwd / "workers").exists():
-        REPO_PATH = cwd
-    else:
-        # Last resort: parent of this file or cwd
-        REPO_PATH = Path(__file__).resolve().parent.parent if "__file__" in globals() else cwd
+print(f"\n📁 [2/5] Repository root set to: {REPO_PATH}")
 
-if str(REPO_PATH) not in sys.path:
-    sys.path.insert(0, str(REPO_PATH))
-
-print(f"📁 [2/5] Repository root set to: {REPO_PATH}")
-
-
-# ==============================================================================
+# =============================================================================
 # 4. PIPELINE BATCH EXECUTION
-# ==============================================================================
+# =============================================================================
 async def process_batch_job():
     """Executes a single end-to-end extraction and embedding batch against VPS."""
     import asyncpg
@@ -118,7 +190,7 @@ async def process_batch_job():
         pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
         print("✅ Database pool connected.")
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        print(f"❝ Database connection failed: {e}")
         return False
 
     try:
@@ -199,9 +271,9 @@ async def process_batch_job():
         await pool.close()
 
 
-# ==============================================================================
+# =============================================================================
 # 5. ENTRYPOINT & RUNNER LOOP
-# ==============================================================================
+# =============================================================================
 async def main():
     if CONTINUOUS_MODE:
         print(f"🤖 Starting GPU Worker in continuous background polling mode (every {POLL_INTERVAL_SECONDS}s)...")

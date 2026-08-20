@@ -351,6 +351,25 @@ async def process_batch_job():
         return False
 
 
+REQUIRED_RUNTIME_ENV_VARS = [
+    "DATABASE_URL", "CONTROL_API_URL",
+    "AZURE_TENANT_ID", "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET", "ONEDRIVE_DRIVE_ID"
+]
+REQUIRED_AUTH_ENV_VARS = ["API_TOKEN", "CONTROL_API_KEY"]
+
+missing_required = [var for var in REQUIRED_RUNTIME_ENV_VARS if not os.getenv(var)]
+auth_set = any(os.getenv(var) for var in REQUIRED_AUTH_ENV_VARS)
+
+if missing_required or not auth_set:
+    print("⛔ Cannot start pipeline:")
+    for var in missing_required:
+        print(f"   - missing {var}")
+    if not auth_set:
+        print("   - missing auth token: set API_TOKEN or CONTROL_API_KEY")
+    raise SystemExit(1)
+
+
 # ==================================================
 # 6. COLAB ENTRYPOINT
 # ==================================================

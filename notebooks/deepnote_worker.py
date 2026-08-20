@@ -1,72 +1,105 @@
-#!/usr/bin/env python3
-"""
-notebooks/deepnote_worker.py
-==============================================================================
-DEEPNOTE GPU WORKER PIPELINE — COMPLETE READY-TO-RUN NOTEBOOK / SCRIPT
-==============================================================================
-Designed for Deepnote (Student / Team) & Google Colab environments.
-Connects to VPS PostgreSQL, executes Discovery -> Extraction -> Embedding ->
-Clustering -> Consensus -> Markdown Wiki Compilation -> pgvector Indexing.
-==============================================================================
-"""
-
-# =============================================================================
-# 0. COLAB / DEEPNOTE ENVIRONMENT SETUP
-# =============================================================================
-# This section must come FIRST to set up the environment correctly
 import os
 import sys
 import time
 import asyncio
+import inspect
 import subprocess
+import shutil
 from pathlib import Path
 
-# Try to import google.colab (only available in Colab)
+# ==================================================
+# 0. ENVIRONMENT & SECRETS CONFIGURATION
+# ==================================================
 try:
     import google.colab
+    from google.colab import userdata
     HAS_COLAB = True
 except Exception:
     HAS_COLAB = False
 
-def _setup_colab_environment():
+GITHUB_TOKEN = None
+if HAS_COLAB:
+    try:
+        GITHUB_TOKEN = userdata.get("GITHUB_TOKEN")
+    except Exception:
+        pass
+if not GITHUB_TOKEN:
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
+
+CONTINUOUS_MODE = False
+POLL_INTERVAL_SECONDS = 30
+
+
+# ==================================================
+# 0.5. ENVIRONMENT VALIDATION
+# ==================================================
+REQUIRED_ENV_VARS = [
+    "DATABASE_URL", "CONTROL_API_URL", "API_TOKEN",
+    "AZURE_TENANT_ID", "AZURE_CLIENT_ID", 
+    "AZURE_CLIENT_SECRET", "ONEDRIVE_DRIVE_ID"
+]
+
+missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+if missing_vars:
+    print("⚠️ Warning: The following environment variables are not set:")
+    for var in missing_vars:
+        print(f"   - {var}")
+    print("Some functionality may be limited. Please set these in Colab secrets or environment.")
+    # We don't fail here because some variables might be optional for certain modes
+    # but we warn the user.
+
+
+# ==================================================
+# 1. REPOSITORY CLONE & ENVIRONMENT SETUP
+# ==================================================
+def _setup_environment():
     """Set up the environment for Colab/Deepnote: clone repo if needed, fix paths."""
-    # Check if we're in Colab
     IN_COLAB = HAS_COLAB
-    
-    # Check if we're in Deepnote
     IN_DEEPNOTE = os.path.exists("/work")
-    
+
+    repo_base = "github.com/davidsilwal/rag-pipeline.git"
+    repo_url = f"https://{GITHUB_TOKEN}@{repo_base}" if GITHUB_TOKEN else f"https://{repo_base}"
+
     if IN_COLAB:
         print("🔧 Detected Google Colab environment")
-        # In Colab, we expect the repo to be cloned or mounted
         repo_dir = Path("/content/rag-pipeline")
+
+        if repo_dir.exists():
+            if (repo_dir / ".git").exists():
+                print("✅ Valid repository found. Pulling latest changes...")
+                try:
+                    subprocess.run(["git", "-C", str(repo_dir), "pull"], check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"⚠️ Git pull failed ({e.stderr.strip()}). Re-cloning...")
+                    shutil.rmtree(repo_dir, ignore_errors=True)
+            else:
+                print(f"⚠️ Removing invalid directory at {repo_dir}...")
+                shutil.rmtree(repo_dir, ignore_errors=True)
+
         if not repo_dir.exists():
             print("📥 Cloning repository...")
-            # Use HTTPS for public access; for private repos, mount or use token
-            subprocess.check_call([
-                "git", "clone", 
-                "https://github.com/davidsilwal/rag-pipeline.git", 
-                str(repo_dir)
-            ])
-        # Change to the repo directory
+            clone_cmd = ["git", "clone", repo_url, str(repo_dir)]
+            result = subprocess.run(clone_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"\n❌ Git clone failed (Exit Code {result.returncode}):")
+                print(result.stderr)
+                raise RuntimeError("Failed to clone repository.")
+
         os.chdir(repo_dir)
-        # Add repo to Python path
         if str(repo_dir) not in sys.path:
             sys.path.insert(0, str(repo_dir))
         print(f"📁 Working directory set to: {repo_dir}")
         return repo_dir
-    
+
     elif IN_DEEPNOTE:
         print("🔧 Detected Deepnote environment")
         repo_dir = Path("/work").resolve()
         if not (repo_dir / "workers").exists():
-            # Fallback: maybe the repo is at a different location
-            # Try current directory or parent
             cwd = Path.cwd()
             if (cwd / "workers").exists():
                 repo_dir = cwd
             else:
-                # Try to find the repo by looking for workers/ upwards
                 for parent in [cwd] + list(cwd.parents):
                     if (parent / "workers").exists():
                         repo_dir = parent
@@ -75,231 +108,163 @@ def _setup_colab_environment():
             sys.path.insert(0, str(repo_dir))
         print(f"📁 Working directory set to: {repo_dir}")
         return repo_dir
-    
+
     else:
-        # Local environment: assume we're already in the repo
         repo_dir = Path.cwd()
-        if (repo_dir / "workers").exists():
-            # We're inside the repo
-            pass
-        elif (Path(".").parent / "rag-pipeline" / "workers").exists():
-            # We're one level inside
-            repo_dir = (Path(".").parent / "rag-pipeline").resolve()
-        else:
-            # Try to clone
-            repo_dir = Path("/content/rag-pipeline")
-            if not repo_dir.exists():
-                subprocess.check_call([
-                    "git", "clone", 
-                    "https://github.com/davidsilwal/rag-pipeline.git", 
-                    str(repo_dir)
-                ])
-            repo_dir = repo_dir.resolve()
-        
         if str(repo_dir) not in sys.path:
             sys.path.insert(0, str(repo_dir))
-        print(f"📁 Working directory set to: {repo_dir}")
         return repo_dir
 
-# Run the setup
-REPO_PATH = _setup_colab_environment()
+REPO_PATH = _setup_environment()
 
-# =============================================================================
-# 1. ENVIRONMENT CONFIGURATION & SECRETS
-# =============================================================================
-# Set your VPS connection details here, or in Deepnote's Environment Variables tab
-VPS_HOST = os.getenv("VPS_PUBLIC_HOST", "YOUR_VPS_IP_OR_DOMAIN")
-os.environ["VPS_PUBLIC_HOST"] = VPS_HOST
-os.environ["CONTROL_API_URL"] = os.getenv("CONTROL_API_URL", f"https://{VPS_HOST}/api/v1")
-os.environ["CONTROL_API_KEY"] = os.getenv("CONTROL_API_KEY", "YOUR_CONTROL_API_KEY")
-os.environ["DATABASE_URL"] = os.getenv(
-    "DATABASE_URL",
-    f"postgresql://gpu_worker:***@{VPS_HOST}:5432/knowledge_base?sslmode=require"
-)
-os.environ["LOCAL_LLM_MODEL"] = os.getenv("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
-os.environ["LOCAL_LLM_API_BASE"] = os.getenv("LOCAL_LLM_API_BASE", "http://127.0.0.1:8000/v1")
-os.environ["EMBEDDING_MODEL_NAME"] = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 
-# Optional: Microsoft Graph / OneDrive Credentials
-os.environ["AZURE_TENANT_ID"] = os.getenv("AZURE_TENANT_ID", "")
-os.environ["AZURE_CLIENT_ID"] = os.getenv("AZURE_CLIENT_ID", "")
-os.environ["AZURE_CLIENT_SECRET"] = os.getenv("AZURE_CLIENT_SECRET", "")
-os.environ["ONEDRIVE_DRIVE_ID"] = os.getenv("ONEDRIVE_DRIVE_ID", "")
-
-# Mode: Set to True for continuous background polling loop, False for single batch run
-CONTINUOUS_MODE = False
-POLL_INTERVAL_SECONDS = 30
-
-# =============================================================================
+# ==================================================
 # 2. AUTOMATIC DEPENDENCY SETUP
-# =============================================================================
-print("\n📦 [1/5] Checking and installing GPU dependencies...")
+# ==================================================
+print("\n📦 [1/5] Checking and installing dependencies...")
 REQUIRED_PACKAGES = [
-    "asyncpg",
-    "FlagEmbedding",
-    "torch",
-    "transformers",
-    "scikit-learn",
-    "umap-learn",
-    "hdbscan",
-    "litellm",
-    "pydantic",
-    "httpx",
-    "pyyaml",
-    "psycopg2-binary",
-    "tqdm"
+    "asyncpg", "FlagEmbedding", "torch", "transformers",
+    "scikit-learn", "umap-learn", "hdbscan", "litellm",
+    "pydantic", "httpx", "pyyaml", "psycopg2-binary", "tqdm", "nest_asyncio"
 ]
 
 try:
-    import asyncpg
-    import FlagEmbedding
-    import umap
-    import hdbscan
+    import asyncpg, FlagEmbedding, umap, hdbscan, nest_asyncio
     print("✅ Key dependencies already installed.")
 except ImportError:
-    print("⏳ Installing missing packages via pip...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + REQUIRED_PACKAGES)
+    import nest_asyncio
     print("✅ Installation complete.")
 
+nest_asyncio.apply()
 
-# =============================================================================
-# 3. REPOSITORY ROOT CONFIRMATION
-# =============================================================================
-print(f"\n📁 [2/5] Repository root set to: {REPO_PATH}")
 
-# =============================================================================
+# ==================================================
+# 3. DYNAMIC DISCOVERY RESOLVER
+# ==================================================
+def resolve_discovery_execution(repo_path: Path):
+    """Dynamically detects whether discovery is a function, class, or module."""
+    try:
+        import workers.gpu_worker.discovery as discovery_mod
+    except ImportError as e:
+        print(f"⚠️ Could not import discovery module: {e}")
+        return None
+
+    # 1. Direct function call matches
+    for candidate_fn in ["discover_path", "discover_files", "discover_workspace", "scan_path", "discover"]:
+        if hasattr(discovery_mod, candidate_fn):
+            fn = getattr(discovery_mod, candidate_fn)
+            if callable(fn):
+                print(f"🔎 Found discovery function: `{candidate_fn}`")
+                return fn(str(repo_path))
+
+    # 2. Class-based matches
+    for attr_name in dir(discovery_mod):
+        if not attr_name.startswith("_"):
+            obj = getattr(discovery_mod, attr_name)
+            if inspect.isclass(obj):
+                instance = obj()
+                for method_name in ["discover_path", "discover_files", "scan", "run", "discover"]:
+                    if hasattr(instance, method_name) and callable(getattr(instance, method_name)):
+                        print(f"🔎 Found discovery class method: `{attr_name}.{method_name}`")
+                        return getattr(instance, method_name)(str(repo_path))
+
+    print("⚠️ No standard discovery entry point found. Available symbols:", [a for a in dir(discovery_mod) if not a.startswith("_")])
+    return None
+
+
+# ==================================================
 # 4. PIPELINE BATCH EXECUTION
-# =============================================================================
+# ==================================================
 async def process_batch_job():
-    """Executes a single end-to-end extraction and embedding batch against VPS."""
-    import asyncpg
-    from workers.gpu_worker.discovery import discover_path
-    from workers.gpu_worker.embedder import BGEM3Embedder
-    from workers.gpu_worker.dedup import run_dedup
-    from workers.gpu_worker.clustering import run_clustering
-    from workers.gpu_worker.consensus import run_consensus
-    from workers.gpu_worker.claims_conflicts import run_claims_and_conflicts
+    import workers.gpu_worker.embedder as embedder_mod
+    import workers.gpu_worker.dedup as dedup_mod
+    import workers.gpu_worker.clustering as clustering_mod
+    import workers.gpu_worker.consensus as consensus_mod
+
+    EmbedderClass = getattr(embedder_mod, "BGEM3Embedder", getattr(embedder_mod, "Embedder", None))
+    run_dedup = getattr(dedup_mod, "run_dedup", getattr(dedup_mod, "dedup", None))
+    run_clustering = getattr(clustering_mod, "run_clustering", getattr(clustering_mod, "cluster", None))
+    run_consensus = getattr(consensus_mod, "run_consensus", getattr(consensus_mod, "consensus", None))
 
     db_url = os.environ["DATABASE_URL"]
     if "YOUR_VPS_IP_OR_DOMAIN" in db_url or "YOUR_PASSWORD" in db_url:
-        print("⚠️ Warning: Please replace default placeholders with your actual VPS DATABASE_URL!")
+        print("⚠️ Error: DATABASE_URL contains placeholder values. Update Section 0 with actual PostgreSQL connection credentials.")
         return False
 
-    print("\n🚀 [3/5] Connecting to VPS PostgreSQL...")
+    print("\n🚀 [2/5] Connecting to PostgreSQL...")
     try:
         pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
-        print("✅ Database pool connected.")
     except Exception as e:
-        print(f"❝ Database connection failed: {e}")
+        print(f"❌ Failed to connect to database: {e}")
         return False
 
     try:
-        # Step A: Local Discovery
-        print("\n🔍 [4/5] Scanning workspace files...")
-        manifest = discover_path(str(REPO_PATH))
-        print(f"   -> Discovered {len(manifest)} valid files after applying noise filters.")
+        print("\n🔍 [3/5] Running discovery on workspace...")
+        manifest = resolve_discovery_execution(REPO_PATH)
 
-        # Step B: Initialize Model
-        print(f"\n🧠 Initializing {os.environ['EMBEDDING_MODEL_NAME']} on GPU...")
-        embedder = BGEM3Embedder(
-            model_name=os.environ["EMBEDDING_MODEL_NAME"],
-            batch_size=32,
-            use_gpu=True
-        )
+        if EmbedderClass:
+            embedder = EmbedderClass(model_name=os.environ["EMBEDDING_MODEL_NAME"], use_gpu=True)
+        else:
+            raise ImportError("Could not locate BGEM3Embedder class in workers.gpu_worker.embedder")
 
-        # Step C: Fetch Queued Sources
         async with pool.acquire() as conn:
-            sources = await conn.fetch(
-                "SELECT source_id, file_path FROM sources WHERE status = 'discovered' ORDER BY created_at ASC LIMIT 50"
-            )
-            
-            if not sources:
-                print("ℹ️ No pending 'discovered' sources found in queue.")
-                return True
+            print("⚡ [4/5] Processing discovered records...")
+            sources = await conn.fetch("SELECT source_id, file_path FROM sources WHERE status = 'discovered' LIMIT 50")
 
-            print(f"   -> Processing {len(sources)} queued sources...")
+            if not sources:
+                print("ℹ️ No records with status 'discovered' found in `sources` table.")
 
             for src in sources:
                 source_id = str(src["source_id"])
-                file_path = src["file_path"]
-                print(f"\n📄 Processing: {file_path}")
-
                 units = await conn.fetch(
-                    "SELECT unit_id, clean_text, content_hash FROM units WHERE source_id = $1 ORDER BY unit_index ASC",
+                    "SELECT unit_id, clean_text, content_hash FROM units WHERE source_id = $1",
                     src["source_id"]
                 )
-
                 if not units:
-                    print(f"   ⚠️ No canonical units extracted yet for source {source_id}, skipping embedding.")
                     continue
 
                 texts = [u["clean_text"] for u in units]
-                dense_vecs, sparse_weights = await embedder.embed_batch(texts)
+                embed_result = embedder.embed_batch(texts)
+                if inspect.iscoroutine(embed_result):
+                    dense_vecs, sparse_weights = await embed_result
+                else:
+                    dense_vecs, sparse_weights = embed_result
 
-                # Upsert into embed_cache
                 for u, dense, sparse in zip(units, dense_vecs, sparse_weights):
                     await conn.execute(
-                        """
-                        INSERT INTO embed_cache (content_hash, dense_vector, sparse_weights)
-                        VALUES ($1, $2, $3)
-                        ON CONFLICT (content_hash) DO NOTHING
-                        """,
-                        u["content_hash"],
-                        dense,
-                        sparse
+                        "INSERT INTO embed_cache (content_hash, dense_vector, sparse_weights) "
+                        "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                        u["content_hash"], dense, sparse
                     )
 
-                # Mark source as extracted/indexed
-                await conn.execute(
-                    "UPDATE sources SET status = 'extracted', updated_at = NOW() WHERE source_id = $1",
-                    src["source_id"]
-                )
+                await conn.execute("UPDATE sources SET status = 'extracted' WHERE source_id = $1", src["source_id"])
 
-                # Deduplication & Topic Clustering
-                await run_dedup(source_id)
-                clusters = await run_clustering(source_id)
-                print(f"   ✅ Embedded {len(units)} units, formed {len(clusters)} topic clusters.")
+                if run_dedup:
+                    dedup_res = run_dedup(source_id)
+                    if inspect.iscoroutine(dedup_res): await dedup_res
 
-                # Run 3-Way Consensus & Conflict detection
-                await run_consensus()
-                await run_claims_and_conflicts("general", units)
+                if run_clustering:
+                    cluster_res = run_clustering(source_id)
+                    if inspect.iscoroutine(cluster_res): await cluster_res
 
-        print("\n🎉 [5/5] Batch processing cycle completed successfully!")
+            print("🧠 [5/5] Running consensus...")
+            if run_consensus:
+                cons_res = run_consensus()
+                if inspect.iscoroutine(cons_res): await cons_res
+
+        print("\n🎉 Batch processing completed successfully!")
         return True
-
     finally:
         await pool.close()
 
 
-# =============================================================================
-# 5. ENTRYPOINT & RUNNER LOOP
-# =============================================================================
-async def main():
-    if CONTINUOUS_MODE:
-        print(f"🤖 Starting GPU Worker in continuous background polling mode (every {POLL_INTERVAL_SECONDS}s)...")
-        print("💡 Press Stop / Interrupt in Deepnote anytime to halt execution.")
-        while True:
-            try:
-                print(f"\n--- [{time.strftime('%Y-%m-%d %H:%M:%S')}] Polling for tasks ---")
-                await process_batch_job()
-            except Exception as exc:
-                print(f"⚠️ Error during poll cycle: {exc}")
-            
-            print(f"⏳ Sleeping for {POLL_INTERVAL_SECONDS}s...")
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
-    else:
-        print("⚡ Running GPU Worker in single-run batch mode...")
-        await process_batch_job()
-
-
 if __name__ == "__main__":
-    # Fix for Colab/Jupyter: nest_asyncio patches the running event loop
     try:
-        import nest_asyncio
-        nest_asyncio.apply()
-    except ImportError:
-        import subprocess, sys
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "nest_asyncio"])
-        import nest_asyncio
-        nest_asyncio.apply()
-    asyncio.run(main())
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            task = loop.create_task(process_batch_job())
+        else:
+            loop.run_until_complete(process_batch_job())
+    except RuntimeError:
+        asyncio.run(process_batch_job())

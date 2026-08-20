@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 import asyncio
 import inspect
 import subprocess
@@ -17,6 +16,19 @@ try:
 except Exception:
     HAS_COLAB = False
 
+GITHUB_TOKEN = None
+if HAS_COLAB:
+    try:
+        GITHUB_TOKEN = userdata.get("GITHUB_TOKEN")
+    except Exception:
+        pass
+if not GITHUB_TOKEN:
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
+CONTINUOUS_MODE = False
+POLL_INTERVAL_SECONDS = 30
+
+
 # ==================================================
 # 0.1. COLAB READY SETUP
 # ==================================================
@@ -25,6 +37,7 @@ def _get_userdata(key: str, default: str = "") -> str:
         return userdata.get(key)
     except Exception:
         return default
+
 
 def _colab_setup():
     if not HAS_COLAB:
@@ -56,27 +69,8 @@ def _colab_setup():
     os.environ.setdefault("ENSURE_TABLES", "false")
     print("✅ Colab environment configured with provided credentials.")
 
+
 _colab_setup()
-
-try:
-    import google.colab
-    from google.colab import userdata
-    HAS_COLAB = True
-except Exception:
-    HAS_COLAB = False
-
-GITHUB_TOKEN = None
-if HAS_COLAB:
-    try:
-        GITHUB_TOKEN = userdata.get("GITHUB_TOKEN")
-    except Exception:
-        pass
-if not GITHUB_TOKEN:
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-
-
-CONTINUOUS_MODE = False
-POLL_INTERVAL_SECONDS = 30
 
 
 # ==================================================
@@ -98,6 +92,7 @@ if missing_vars or not auth_set:
     if not auth_set:
         print("   - No auth token found. Set API_TOKEN or CONTROL_API_KEY.")
     print("Some functionality may be limited.")
+
 
 # ==================================================
 # 1. REPOSITORY CLONE & ENVIRONMENT SETUP
@@ -164,6 +159,7 @@ def _setup_environment():
             sys.path.insert(0, str(repo_dir))
         return repo_dir
 
+
 REPO_PATH = _setup_environment()
 
 
@@ -198,6 +194,7 @@ API_TOKEN = os.getenv("API_TOKEN", "") or os.getenv("CONTROL_API_KEY", "")
 
 if not API_TOKEN:
     print("⚠️ Warning: API_TOKEN/CONTROL_API_KEY is not set. The Control API will reject unauthenticated requests.")
+
 
 async def _api_headers():
     headers = {"Content-Type": "application/json"}
@@ -255,7 +252,7 @@ def resolve_discovery_execution(repo_path: Path):
 
 
 # ==================================================
-# 5. PIPELINE BATCH EXECUTION (Control API mode)
+# 5. PIPELINE BATCH EXECUTION
 # ==================================================
 async def process_batch_job():
     import workers.gpu_worker.embedder as embedder_mod
@@ -344,12 +341,20 @@ async def process_batch_job():
         return False
 
 
-if __name__ == "__main__":
+# ==================================================
+# 6. COLAB ENTRYPOINT
+# ==================================================
+def run_pipeline():
+    print("\n🚀 Starting RAG pipeline...")
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            task = loop.create_task(process_batch_job())
+            loop.create_task(process_batch_job())
         else:
             loop.run_until_complete(process_batch_job())
     except RuntimeError:
         asyncio.run(process_batch_job())
+
+
+# In Colab notebooks, this cell should finish with a clear next step.
+print("\n👉 To start the pipeline in Colab, run: run_pipeline()")

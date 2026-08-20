@@ -1,4 +1,12 @@
-localhost
+{
+    admin off
+}
 
-# Reverse proxy to control-api
-reverse_proxy control-api:8000
+:80 {
+    reverse_proxy http://control-api:8000
+}
+
+:443 {
+    tls internal
+    reverse_proxy http://control-api:8000
+}

@@ -90,7 +90,7 @@ def _setup_environment():
         return repo_dir
 
     elif IN_DEEPNOTE:
-        print("🔧 Detected Deepnote environment")
+        print("🔧 Detecting Deepnote environment")
         repo_dir = Path("/work").resolve()
         if not (repo_dir / "workers").exists():
             cwd = Path.cwd()
@@ -141,7 +141,7 @@ nest_asyncio.apply()
 # ==================================================
 import httpx
 
-CONTROL_API_URL = os.getenv("CONTROL_API_URL", f"https://{os.getenv('VPS_PUBLIC_HOST', 'localhost')}/api/v1")
+CONTROL_API_URL = os.getenv("CONTROL_API_URL", "http://169.58.94.123/api/v1")
 API_TOKEN = os.getenv("API_TOKEN", "")
 
 async def _api_headers():
@@ -212,11 +212,6 @@ async def process_batch_job():
     run_dedup = getattr(dedup_mod, "run_dedup", getattr(dedup_mod, "dedup", None))
     run_clustering = getattr(clustering_mod, "run_clustering", getattr(clustering_mod, "cluster", None))
     run_consensus = getattr(consensus_mod, "run_consensus", getattr(consensus_mod, "consensus", None))
-
-    db_url = os.environ.get("DATABASE_URL", "")
-    if not db_url or "YOUR_VPS_IP_OR_DOMAIN" in db_url or "YOUR_PASSWORD" in db_url:
-        print("⚠️ Error: DATABASE_URL contains placeholder values or is missing.")
-        return False
 
     print("\n🚀 [2/5] Connecting via Control API...")
     try:

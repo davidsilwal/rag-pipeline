@@ -35,17 +35,21 @@ POLL_INTERVAL_SECONDS = 30
 # 0.5. ENVIRONMENT VALIDATION
 # ==================================================
 REQUIRED_ENV_VARS = [
-    "DATABASE_URL", "CONTROL_API_URL", "API_TOKEN",
+    "DATABASE_URL", "CONTROL_API_URL",
     "AZURE_TENANT_ID", "AZURE_CLIENT_ID", 
     "AZURE_CLIENT_SECRET", "ONEDRIVE_DRIVE_ID"
 ]
+AUTH_ENV_VARS = ["API_TOKEN", "CONTROL_API_KEY"]
 
 missing_vars = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-if missing_vars:
-    print("⚠️ Warning: The following environment variables are not set:")
+auth_set = any(os.getenv(var) for var in AUTH_ENV_VARS)
+if missing_vars or not auth_set:
+    print("⚠️ Warning: Environment configuration issue:")
     for var in missing_vars:
-        print(f"   - {var}")
-    print("Some functionality may be limited. Please set these in Colab secrets or environment.")
+        print(f"   - {var} is not set")
+    if not auth_set:
+        print("   - No auth token found. Set API_TOKEN or CONTROL_API_KEY.")
+    print("Some functionality may be limited.")
 
 # ==================================================
 # 1. REPOSITORY CLONE & ENVIRONMENT SETUP
@@ -142,7 +146,10 @@ nest_asyncio.apply()
 import httpx
 
 CONTROL_API_URL = os.getenv("CONTROL_API_URL", "http://169.58.94.123/api/v1")
-API_TOKEN = os.getenv("API_TOKEN", "")
+API_TOKEN = os.getenv("API_TOKEN", "") or os.getenv("CONTROL_API_KEY", "")
+
+if not API_TOKEN:
+    print("⚠️ Warning: API_TOKEN/CONTROL_API_KEY is not set. The Control API will reject unauthenticated requests.")
 
 async def _api_headers():
     headers = {"Content-Type": "application/json"}

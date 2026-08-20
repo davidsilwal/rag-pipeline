@@ -76,13 +76,18 @@ except ImportError:
     print("✅ Installation complete.")
 
 
-# ==============================================================================
+# =============================================================================
 # 3. WORKSPACE & REPOSITORY PATH SETUP
-# ==============================================================================
+# =============================================================================
 REPO_PATH = Path("/work").resolve()  # Deepnote default root
 if not (REPO_PATH / "workers").exists():
-    # Fallback to local script directory or current working directory
-    REPO_PATH = Path(__file__).resolve().parent.parent if "__file__" in globals() else Path(".").resolve()
+    # Fallback: use current working directory if it contains the repo
+    cwd = Path.cwd().resolve()
+    if (cwd / "workers").exists():
+        REPO_PATH = cwd
+    else:
+        # Last resort: parent of this file or cwd
+        REPO_PATH = Path(__file__).resolve().parent.parent if "__file__" in globals() else cwd
 
 if str(REPO_PATH) not in sys.path:
     sys.path.insert(0, str(REPO_PATH))

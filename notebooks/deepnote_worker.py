@@ -193,6 +193,8 @@ try:
 except ImportError:
     print("⚠️ nest_asyncio is not available; async execution may fail in Colab/Jupyter.")
 
+print("ℹ️ Note: heavy model downloads are deferred until run_pipeline() to keep startup light.")
+
 
 # ==================================================
 # 3. CONTROL API CLIENT

@@ -30,6 +30,7 @@ if not GITHUB_TOKEN:
 CONTINUOUS_MODE = False
 POLL_INTERVAL_SECONDS = 30
 
+
 # ==================================================
 # 0.5. ENVIRONMENT VALIDATION
 # ==================================================
@@ -113,6 +114,7 @@ def _setup_environment():
 
 REPO_PATH = _setup_environment()
 
+
 # ==================================================
 # 2. AUTOMATIC DEPENDENCY SETUP
 # ==================================================
@@ -133,8 +135,40 @@ except ImportError:
 
 nest_asyncio.apply()
 
+
 # ==================================================
-# 3. DYNAMIC DISCOVERY RESOLVER
+# 3. CONTROL API CLIENT
+# ==================================================
+import httpx
+
+CONTROL_API_URL = os.getenv("CONTROL_API_URL", f"https://{os.getenv('VPS_PUBLIC_HOST', 'localhost')}/api/v1")
+API_TOKEN = os.getenv("API_TOKEN", "")
+
+async def _api_headers():
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
+    return headers
+
+
+async def api_get(path: str, params: dict | None = None):
+    url = f"{CONTROL_API_URL}{path}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(url, headers=await _api_headers(), params=params)
+        r.raise_for_status()
+        return r.json()
+
+
+async def api_post(path: str, payload: dict):
+    url = f"{CONTROL_API_URL}{path}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(url, headers=await _api_headers(), json=payload)
+        r.raise_for_status()
+        return r.json() if r.text else None
+
+
+# ==================================================
+# 4. DYNAMIC DISCOVERY RESOLVER
 # ==================================================
 def resolve_discovery_execution(repo_path: Path):
     """Dynamically detects whether discovery is a function, class, or module."""
@@ -144,7 +178,6 @@ def resolve_discovery_execution(repo_path: Path):
         print(f"⚠️ Could not import discovery module: {e}")
         return None
 
-    # 1. Direct function call matches
     for candidate_fn in ["discover_path", "discover_files", "discover_workspace", "scan_path", "discover"]:
         if hasattr(discovery_mod, candidate_fn):
             fn = getattr(discovery_mod, candidate_fn)
@@ -152,7 +185,6 @@ def resolve_discovery_execution(repo_path: Path):
                 print(f"🔎 Found discovery function: `{candidate_fn}`")
                 return fn(str(repo_path))
 
-    # 2. Class-based matches
     for attr_name in dir(discovery_mod):
         if not attr_name.startswith("_"):
             obj = getattr(discovery_mod, attr_name)
@@ -166,8 +198,9 @@ def resolve_discovery_execution(repo_path: Path):
     print("⚠️ No standard discovery entry point found. Available symbols:", [a for a in dir(discovery_mod) if not a.startswith("_")])
     return None
 
+
 # ==================================================
-# 4. PIPELINE BATCH EXECUTION
+# 5. PIPELINE BATCH EXECUTION (Control API mode)
 # ==================================================
 async def process_batch_job():
     import workers.gpu_worker.embedder as embedder_mod
@@ -180,21 +213,18 @@ async def process_batch_job():
     run_clustering = getattr(clustering_mod, "run_clustering", getattr(clustering_mod, "cluster", None))
     run_consensus = getattr(consensus_mod, "run_consensus", getattr(consensus_mod, "consensus", None))
 
-    db_url = os.environ["DATABASE_URL"]
-    if "YOUR_VPS_IP_OR_DOMAIN" in db_url or "YOUR_PASSWORD" in db_url:
-        print("⚠️ Error: DATABASE_URL contains placeholder values. Update Section 0 with actual PostgreSQL connection credentials.")
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url or "YOUR_VPS_IP_OR_DOMAIN" in db_url or "YOUR_PASSWORD" in db_url:
+        print("⚠️ Error: DATABASE_URL contains placeholder values or is missing.")
         return False
 
-    print("\n🚀 [2/5] Connecting to PostgreSQL...")
+    print("\n🚀 [2/5] Connecting via Control API...")
     try:
-        pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
+        health = await api_get("/health")
+        print(f"✅ Control API reachable: {health}")
     except Exception as e:
-        print(f"❌ Failed to connect to PostgreSQL: {e}")
-        print("   Please check:")
-        print("   1. The VPS is running and accessible from this network.")
-        print("   2. The firewall on the VPS allows incoming connections on port 5432 from your current IP.")
-        print("   3. The Docker container for PostgreSQL is running and mapped correctly (should be 0.0.0.0:5432->5432/tcp).")
-        print("   4. The DATABASE_URL environment variable is set correctly.")
+        print(f"❌ Control API unreachable: {e}")
+        print("   Please check CONTROL_API_URL and API_TOKEN.")
         return False
 
     try:
@@ -206,55 +236,63 @@ async def process_batch_job():
         else:
             raise ImportError("Could not locate BGEM3Embedder class in workers.gpu_worker.embedder")
 
-        async with pool.acquire() as conn:
-            print("⚡ [4/5] Processing discovered records...")
-            sources = await conn.fetch("SELECT source_id, file_path FROM sources WHERE status = 'discovered' LIMIT 50")
+        print("⚡ [4/5] Processing discovered records...")
+        sources = await api_get("/sources", params={"status": "discovered", "limit": 50})
 
-            if not sources:
-                print("ℹ️ No records with status 'discovered' found in `sources` table.")
+        if isinstance(sources, list):
+            print(f"ℹ️ Found {len(sources)} discovered source(s).")
+        else:
+            print("⚠️ Unexpected /sources response format.")
+            sources = []
 
-            for src in sources:
-                source_id = str(src["source_id"])
-                units = await conn.fetch(
-                    "SELECT unit_id, clean_text, content_hash FROM units WHERE source_id = $1",
-                    src["source_id"]
-                )
-                if not units:
-                    continue
+        for src in sources:
+            source_id = str(src.get("source_id") or src.get("id") or "")
+            file_path = src.get("file_path", "")
+            print(f"\n📄 Processing source: {file_path}")
 
-                texts = [u["clean_text"] for u in units]
-                embed_result = embedder.embed_batch(texts)
-                if inspect.iscoroutine(embed_result):
-                    dense_vecs, sparse_weights = await embed_result
-                else:
-                    dense_vecs, sparse_weights = embed_result
+            units_resp = await api_get("/units", params={"source_id": source_id})
+            units = units_resp if isinstance(units_resp, list) else []
+            if not units:
+                continue
 
-                for u, dense, sparse in zip(units, dense_vecs, sparse_weights):
-                    await conn.execute(
-                        "INSERT INTO embed_cache (content_hash, dense_vector, sparse_weights) "
-                        "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-                        u["content_hash"], dense, sparse
-                    )
+            texts = [u.get("clean_text", "") for u in units]
+            embed_result = embedder.embed_batch(texts)
+            if inspect.iscoroutine(embed_result):
+                dense_vecs, sparse_weights = await embed_result
+            else:
+                dense_vecs, sparse_weights = embed_result
 
-                await conn.execute("UPDATE sources SET status = 'extracted' WHERE source_id = $1", src["source_id"])
+            for u, dense, sparse in zip(units, dense_vecs, sparse_weights):
+                await api_post("/embed_cache", {
+                    "content_hash": u.get("content_hash"),
+                    "dense_vector": dense,
+                    "sparse_weights": sparse,
+                })
 
-                if run_dedup:
-                    dedup_res = run_dedup(source_id)
-                    if inspect.iscoroutine(dedup_res): await dedup_res
+            await api_post(f"/sources/{source_id}/status", {"status": "extracted"})
 
-                if run_clustering:
-                    cluster_res = run_clustering(source_id)
-                    if inspect.iscoroutine(cluster_res): await cluster_res
+            if run_dedup:
+                dedup_res = run_dedup(source_id)
+                if inspect.iscoroutine(dedup_res):
+                    await dedup_res
 
-            print("🧠 [5/5] Running consensus...")
-            if run_consensus:
-                cons_res = run_consensus()
-                if inspect.iscoroutine(cons_res): await cons_res
+            if run_clustering:
+                cluster_res = run_clustering(source_id)
+                if inspect.iscoroutine(cluster_res):
+                    await cluster_res
+
+        print("🧠 [5/5] Running consensus...")
+        if run_consensus:
+            cons_res = run_consensus()
+            if inspect.iscoroutine(cons_res):
+                await cons_res
 
         print("\n🎉 Batch processing completed successfully!")
         return True
-    finally:
-        await pool.close()
+    except Exception as e:
+        print(f"❌ Batch job failed: {e}")
+        return False
+
 
 if __name__ == "__main__":
     try:

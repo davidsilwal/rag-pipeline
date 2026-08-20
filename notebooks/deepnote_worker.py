@@ -20,6 +20,12 @@ except Exception:
 # ==================================================
 # 0.1. COLAB READY SETUP
 # ==================================================
+def _get_userdata(key: str, default: str = "") -> str:
+    try:
+        return userdata.get(key)
+    except Exception:
+        return default
+
 def _colab_setup():
     if not HAS_COLAB:
         return
@@ -35,14 +41,14 @@ def _colab_setup():
     VPS_HOST = "169.58.94.123"
     os.environ.setdefault("VPS_PUBLIC_HOST", VPS_HOST)
     os.environ.setdefault("CONTROL_API_URL", f"http://{VPS_HOST}/api/v1")
-    os.environ.setdefault("API_TOKEN", userdata.get("API_TOKEN", ""))
-    os.environ.setdefault("CONTROL_API_KEY", userdata.get("CONTROL_API_KEY", ""))
+    os.environ.setdefault("API_TOKEN", _get_userdata("API_TOKEN", ""))
+    os.environ.setdefault("CONTROL_API_KEY", _get_userdata("CONTROL_API_KEY", ""))
     os.environ.setdefault("DATABASE_URL", f"postgresql://gpu_worker:***@{VPS_HOST}:5432/knowledge_base?sslmode=require")
     os.environ.setdefault("LOCAL_LLM_MODEL", "free")
     os.environ.setdefault("LOCAL_LLM_API_BASE", "https://llm.aarohanithub.com.np/v1")
     os.environ.setdefault("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
     os.environ.setdefault("AZURE_CLIENT_ID", "3985cbb8-9aa7-4c82-b033-304008b53b64")
-    os.environ.setdefault("AZURE_CLIENT_SECRET", userdata.get("AZURE_CLIENT_SECRET", ""))
+    os.environ.setdefault("AZURE_CLIENT_SECRET", _get_userdata("AZURE_CLIENT_SECRET", ""))
     os.environ.setdefault("AZURE_TENANT_ID", "cb955086-fa03-4609-b069-38942244e65d")
     os.environ.setdefault("ONEDRIVE_DRIVE_ID", "b!V_4iARVYaU-gJ2vkMnW6v8VcRhArCO9Ao1749Z-bCtXoPW47L9UyR4Fft4Xn5tXR")
     os.environ.setdefault("ONEDRIVE_ROOT_FOLDER", "/Enterprise_Knowledge_Base")

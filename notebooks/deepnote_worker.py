@@ -177,11 +177,21 @@ try:
     import asyncpg, FlagEmbedding, umap, hdbscan, nest_asyncio
     print("✅ Key dependencies already installed.")
 except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + REQUIRED_PACKAGES)
-    import nest_asyncio
-    print("✅ Installation complete.")
+    print("⚠️ Some dependencies are missing; attempting pip install...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + REQUIRED_PACKAGES)
+        print("✅ Installation complete.")
+    except Exception as e:
+        print(f"❌ Dependency install failed or is blocked in this environment: {e}")
+        print("   Please ensure these packages are available before running the pipeline:")
+        for pkg in REQUIRED_PACKAGES:
+            print(f"   - {pkg}")
 
-nest_asyncio.apply()
+try:
+    import nest_asyncio
+    nest_asyncio.apply()
+except ImportError:
+    print("⚠️ nest_asyncio is not available; async execution may fail in Colab/Jupyter.")
 
 
 # ==================================================

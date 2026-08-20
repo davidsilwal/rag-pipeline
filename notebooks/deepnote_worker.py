@@ -216,4 +216,13 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Fix for Colab/Jupyter: nest_asyncio patches the running event loop
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except ImportError:
+        import subprocess, sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "nest_asyncio"])
+        import nest_asyncio
+        nest_asyncio.apply()
     asyncio.run(main())

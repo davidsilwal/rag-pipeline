@@ -12,11 +12,20 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.pyc
+
+# Secrets (never commit real keys!)
+secrets/
+*.key
+*.pem
+*.crt
+*.cert
 
 # Database
 *.sqlite
 *.db
-*.log
+*.mdb
+*.accdb
 
 # IDE
 .vscode/
@@ -35,11 +44,46 @@ Thumbs.db
 # Docker
 *.pid
 
-# Uploads
-uploads/
+# Uploads/media
+/uploads/
 *.mp4
 *.mp3
+*.wav
+*.avi
+*.mov
 
-# Templates (keep actual template files)
-templates/*
-!templates/.gitkeep
+# Test outputs
+/tests/output/
+test-results/
+htmlcov/
+.coverage
+
+# ML models/checkpoints
+models/
+checkpoints/
+*.h5
+*.pt
+*.pth
+
+# GitHub/GitLab specific
+.github/workflows/*.yml
+Actions/ 2>/dev/null || true
+
+# Project-specific
+/__pycache__/
+/app/__pycache__/
+/workers/gpu_worker/__pycache__/
+
+# Generated/derived
+/generated/
+/output/
+/reports/
+
+# Local config overrides
+/config/local.py
+/local_settings.py
+
+# Sensitive data placeholders (never real values)
+*.env.example
+.env.example
+.envrc

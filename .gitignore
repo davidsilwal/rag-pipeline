@@ -1,6 +1,7 @@
-# Environment
+# Environment & Local Configuration
 .env
 .env.*
+.envrc
 !.env.example
 
 # Python
@@ -12,39 +13,62 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.pyc
+*.egg
+.venv/
+venv/
+ENV/
+env/
 
-# Secrets (never commit real keys!)
+# Testing & Quality
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+test-results/
+/tests/output/
+
+# Secrets & Credentials
 secrets/
 *.key
 *.pem
 *.crt
 *.cert
 
-# Database
+# Database & SQLite
 *.sqlite
+*.sqlite3
 *.db
+*.db-shm
+*.db-wal
 *.mdb
 *.accdb
 
-# IDE
+# Logs
+*.log
+logs/
+
+# Agent & Tool Specific
+.omp/
+.opencode/
+
+# IDE & Editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Jupyter Notebook
+# Jupyter Notebooks
 .ipynb_checkpoints/
 
-# Docker
+# Docker & Process
 *.pid
 
-# Uploads/media
+# Media & Uploads
 /uploads/
 *.mp4
 *.mp3
@@ -52,29 +76,16 @@ Thumbs.db
 *.avi
 *.mov
 
-# Test outputs
-/tests/output/
-test-results/
-htmlcov/
-.coverage
-
-# ML models/checkpoints
+# ML Models / Weights / Large Checkpoints
 models/
 checkpoints/
 *.h5
 *.pt
 *.pth
+*.bin
+*.onnx
 
-# GitHub/GitLab specific
-.github/workflows/*.yml
-Actions/ 2>/dev/null || true
-
-# Project-specific
-/__pycache__/
-/app/__pycache__/
-/workers/gpu_worker/__pycache__/
-
-# Generated/derived
+# Generated / Output
 /generated/
 /output/
 /reports/
@@ -82,8 +93,3 @@ Actions/ 2>/dev/null || true
 # Local config overrides
 /config/local.py
 /local_settings.py
-
-# Sensitive data placeholders (never real values)
-*.env.example
-.env.example
-.envrc

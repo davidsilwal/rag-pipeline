@@ -36,9 +36,10 @@ services:
   prefect-server:
     image: prefecthq/prefect:3-python3.12
     restart: unless-stopped
+    command: prefect server start --host 0.0.0.0
     mem_limit: 800m
     environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/prefect
       PREFECT_SERVER_API_HOST: "0.0.0.0"
     ports:
       - "4200:4200"

@@ -30,7 +30,6 @@ if not GITHUB_TOKEN:
 CONTINUOUS_MODE = False
 POLL_INTERVAL_SECONDS = 30
 
-
 # ==================================================
 # 0.5. ENVIRONMENT VALIDATION
 # ==================================================
@@ -46,9 +45,6 @@ if missing_vars:
     for var in missing_vars:
         print(f"   - {var}")
     print("Some functionality may be limited. Please set these in Colab secrets or environment.")
-    # We don't fail here because some variables might be optional for certain modes
-    # but we warn the user.
-
 
 # ==================================================
 # 1. REPOSITORY CLONE & ENVIRONMENT SETUP
@@ -117,7 +113,6 @@ def _setup_environment():
 
 REPO_PATH = _setup_environment()
 
-
 # ==================================================
 # 2. AUTOMATIC DEPENDENCY SETUP
 # ==================================================
@@ -137,7 +132,6 @@ except ImportError:
     print("✅ Installation complete.")
 
 nest_asyncio.apply()
-
 
 # ==================================================
 # 3. DYNAMIC DISCOVERY RESOLVER
@@ -172,7 +166,6 @@ def resolve_discovery_execution(repo_path: Path):
     print("⚠️ No standard discovery entry point found. Available symbols:", [a for a in dir(discovery_mod) if not a.startswith("_")])
     return None
 
-
 # ==================================================
 # 4. PIPELINE BATCH EXECUTION
 # ==================================================
@@ -196,7 +189,12 @@ async def process_batch_job():
     try:
         pool = await asyncpg.create_pool(db_url, min_size=1, max_size=5)
     except Exception as e:
-        print(f"❌ Failed to connect to database: {e}")
+        print(f"❌ Failed to connect to PostgreSQL: {e}")
+        print("   Please check:")
+        print("   1. The VPS is running and accessible from this network.")
+        print("   2. The firewall on the VPS allows incoming connections on port 5432 from your current IP.")
+        print("   3. The Docker container for PostgreSQL is running and mapped correctly (should be 0.0.0.0:5432->5432/tcp).")
+        print("   4. The DATABASE_URL environment variable is set correctly.")
         return False
 
     try:
@@ -257,7 +255,6 @@ async def process_batch_job():
         return True
     finally:
         await pool.close()
-
 
 if __name__ == "__main__":
     try:

@@ -1,0 +1,4 @@
+localhost
+
+# Reverse proxy to control-api
+reverse_proxy control-api:8000

@@ -1,0 +1,84 @@
+# version: "3.8"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    mem_limit: 1800m
+    environment:
+      POSTGRES_DB: knowledge_base
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d knowledge_base"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 200m
+    command: redis-server --maxmemory 150mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  prefect-server:
+    image: prefecthq/prefect:3-python3.12
+    restart: unless-stopped
+    mem_limit: 800m
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
+      PREFECT_SERVER_API_HOST: "0.0.0.0"
+    ports:
+      - "4200:4200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  control-api:
+    build:
+      context: ./apps/control_api
+      dockerfile: Dockerfile
+    image: rag-pipeline-control-api:latest
+    restart: unless-stopped
+    mem_limit: 400m
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
+      REDIS_URL: redis://redis:6379/0
+      API_TOKEN: ${API_TOKEN}
+      WIKI_REPO_PATH: /var/data/wiki
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    mem_limit: 100m
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy-config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:

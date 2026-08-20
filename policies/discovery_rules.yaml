@@ -1,0 +1,117 @@
+# ============================================================================
+# policies/discovery_rules.yaml
+# Global ignore patterns & project marker overrides for the discovery engine (§7).
+# ============================================================================
+version: 1
+
+ignore_dirs:
+  # Version control internals
+  - .git
+  - .svn
+  - .hg
+  # Dependency / package caches
+  - node_modules
+  - bower_components
+  - vendor
+  - .bundle
+  - __pycache__
+  - .mypy_cache
+  - .pytest_cache
+  - .ruff_cache
+  - .tox
+  - .nox
+  - .venv
+  - venv
+  - env
+  - .env.local
+  - packages
+  # Build output directories
+  - bin
+  - obj
+  - build
+  - dist
+  - out
+  - target
+  - _build
+  - .next
+  - .nuxt
+  - .output
+  - .turbo
+  - .parcel-cache
+  - .webpack
+  - .angular
+  - Debug
+  - Release
+  - x64
+  - x86
+  - .gradle
+  - .idea
+  - .vs
+  - .vscode
+  # Container / infrastructure artifacts
+  - .terraform
+  - .terragrunt-cache
+  - coverage
+  - .nyc_output
+  - htmlcov
+  - TestResults
+  # OS / editor junk
+  - .DS_Store
+  - Thumbs.db
+  - __MACOSX
+  - .Spotlight-V100
+  - .Trashes
+
+ignore_files:
+  # Lock files
+  - "*.lock"
+  - package-lock.json
+  - yarn.lock
+  - pnpm-lock.yaml
+  - composer.lock
+  - Gemfile.lock
+  - go.sum
+  - flake.lock
+  # Compiled / binary artifacts
+  - "*.pyc"
+  - "*.pyo"
+  - "*.class"
+  - "*.o"
+  - "*.obj"
+  - "*.dll"
+  - "*.exe"
+  - "*.so"
+  - "*.dylib"
+  - "*.wasm"
+  - "*.min.js"
+  - "*.min.css"
+  - "*.map"
+  - "*.bundle.js"
+  # Auto-generated
+  - "*.designer.cs"
+  - "*.generated.*"
+  - "*.g.cs"
+  - "*.g.dart"
+  - ".gitignore"
+  - ".gitattributes"
+  - ".editorconfig"
+  - ".prettierrc*"
+  - ".eslintrc*"
+  - "*.tfstate"
+  - "*.tfstate.backup"
+  # Large media (unless in docs/assets)
+  - "*.mp4"
+  - "*.mov"
+  - "*.avi"
+  - "*.zip"
+  - "*.tar.gz"
+  - "*.rar"
+  - "*.iso"
+
+whitelist:
+  - "vendor/internal-sdk/docs/**"
+  - ".github/ISSUE_TEMPLATE/**"
+
+custom_project_markers:
+  - marker: "CODEOWNERS"
+    project_type: "git_repository"

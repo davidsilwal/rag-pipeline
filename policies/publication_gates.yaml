@@ -1,0 +1,38 @@
+# ============================================================================
+# policies/publication_gates.yaml
+# Tunable thresholds & weights for all pipeline quality gates.
+# Phase 4 calibrates these against the gold set — do NOT hard-code in code.
+# ============================================================================
+
+# 3-Way Consensus Weights (sum = 1.0)
+consensus_weights:
+  hdbscan: 0.40
+  graphrag: 0.35
+  headings: 0.25
+
+# Consensus Gating Thresholds
+consensus_thresholds:
+  auto_approve: 0.72   # >= -> auto assign to wiki topic
+  split: 0.50          # >= split && < auto_approve -> sub-topic/supporting section
+
+# Markdown Compilation Coverage
+coverage:
+  unit_recall_cosine: 0.88   # min cosine for a unit to be "covered"
+  page_min: 0.95             # overall page coverage gate (fraction of units covered)
+
+# Deduplication
+dedup:
+  minhash_jaccard: 0.85      # LSH threshold for near-duplicate pairs
+  review_band: [0.80, 0.88]  # similarity band -> human review
+
+# Topic Coherence
+topic_coherence:
+  npmi_min: 0.45             # HDBSCAN NPMI gate
+
+# Retrieval Accuracy
+retrieval:
+  recall_at_10: 0.88         # gold benchmark recall@10
+
+# End-to-End Faithfulness
+faithfulness:
+  grounded_score_min: 0.92   # RAG-Triad/Ragas groundedness

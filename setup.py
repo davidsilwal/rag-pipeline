@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""setup.py — Build script for LLM Markdown Wiki Pipeline Docker images."""
+
+from setuptools import setup, find_packages
+
+setup(
+    name="rag-pipeline",
+    version="2.2.0",
+    packages=find_packages(),
+    install_requires=[
+        "fastapi>=0.110.0",
+        "uvicorn[standard]>=0.29.0",
+        "pydantic>=2.6.0",
+        "pydantic-settings>=2.2.0",
+        "asyncpg>=0.29.0",
+        "sqlalchemy[asyncio]>=2.0.29",
+        "alembic>=1.13.0",
+        "pgvector>=0.4.0",
+        "redis>=5.0.0",
+        "PyYAML>=6.0.0",
+        "litellm>=1.40.0",
+        "FlagEmbedding>=2.0.0",
+        "datasketch>=1.11.0",
+        "umap-learn>=0.5.4",
+        "hdbscan>=0.8.39",
+        "numpy>=1.24.0",
+        "pandas>=2.2.0",
+        "python-docling>=0.29.0",
+        "markitdown[pdf,docx,eml,msg,html]>=0.0.1",
+        "extract-msg>=0.25",
+        "beautifulsoup4>=4.12.0",
+        "msgraph-sdk>=1.0.0",
+        "msal>=1.28.0",
+        "aiohttp>=3.9.0",
+        "pyyaml>=6.0.0",
+        "pytest>=8.0.0",
+        "pytest-asyncio>=0.23.0",
+    ],
+    python_requires=">=3.12",
+    author="LLM Wiki Pipeline Team",
+    description="LLM Markdown Wiki Pipeline",
+    long_description=open("README.md").read() if os.path.exists("README.md") else "",
+    long_description_content_type="text/markdown",
+    classifiers=[
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.12",
+    ],
+)

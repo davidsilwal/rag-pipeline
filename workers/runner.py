@@ -442,7 +442,7 @@ async def handle_compile(api: ApiClient, cfg: dict, task: dict) -> dict:
     page_payload = {
         "page_id": str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_URL, scope_id)),
         "file_path": page.page_path,
-        "title": pathlib.Path(page.page_path).stem if page.page_path else scope_id,
+        "title": page.page_path.split("/")[-1].removesuffix(".md") if page.page_path else scope_id,
         "page_type": "source",
         "domain": "docs",
         "status": "active",

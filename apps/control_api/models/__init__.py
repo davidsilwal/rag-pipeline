@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """apps/control_api/models/ — SQLAlchemy ORM models."""
 
-from sqlalchemy import Column, String, Integer, Boolean, Float, JSON, Text, ForeignKey, Index, UniqueConstraint, CheckConstraint, DateTime
+from sqlalchemy import Column, String, Integer, Boolean, Float, JSON, Text, ForeignKey, Index, UniqueConstraint, CheckConstraint, DateTime, LargeBinary
 from sqlalchemy import ARRAY
-from sqlalchemy.dialects.postgresql import UUID, TSVECTOR
+from sqlalchemy.dialects.postgresql import UUID, TSVECTOR, INET
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func, text
@@ -261,5 +261,90 @@ class CoverageReport(Base):
 
 class SyncState(Base):
     __tablename__ = "sync_state"
-    table_oid = Column(Integer, primary_key=True)
-    last_sync_at = Column(DateTime(timezone=True), default=func.now())
+    sync_key = Column(String(64), primary_key=True)
+    delta_token = Column(Text)
+    last_sync_started_at = Column(DateTime(timezone=True))
+    last_sync_completed_at = Column(DateTime(timezone=True))
+    total_files_discovered = Column(Integer, default=0)
+    metadata_ = Column("metadata", JSON, default={})
+
+
+# ---------------------------------------------------------------------------
+# Multi-worker orchestration (plan §3–§5)
+# ---------------------------------------------------------------------------
+
+class Worker(Base):
+    __tablename__ = "workers"
+    worker_id = Column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
+    name = Column(String(255), unique=True, nullable=False)
+    platform = Column(String(255), default="bare", nullable=False)
+    hostname = Column(String(255))
+    ip = Column(INET)
+    version = Column(String(255))
+    status = Column(String(32), default="online", nullable=False)
+    capabilities = Column(JSON, default=dict, nullable=False)
+    stages_enabled = Column(ARRAY(String), default=list, nullable=False)
+    concurrency_max = Column(Integer, default=1, nullable=False)
+    worker_token = Column(UUID, server_default=text("gen_random_uuid()"), nullable=False)
+    registered_at = Column(DateTime(timezone=True), default=func.now())
+    last_heartbeat = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (
+        Index("idx_workers_status", "status"),
+        Index("idx_workers_heartbeat", "last_heartbeat"),
+    )
+
+
+class TaskQueue(Base):
+    __tablename__ = "task_queue"
+    task_id = Column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
+    stage = Column(String(32), nullable=False)
+    scope_type = Column(String(32), nullable=False)
+    scope_id = Column(Text, nullable=False)
+    priority = Column(Integer, default=100, nullable=False)
+    status = Column(String(32), default="queued", nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    max_attempts = Column(Integer, default=3, nullable=False)
+    payload = Column(JSON, default=dict, nullable=False)
+    next_run_at = Column(DateTime(timezone=True), default=func.now())
+    leased_by = Column(UUID, ForeignKey("workers.worker_id"))
+    lease_token = Column(UUID)
+    lease_expires_at = Column(DateTime(timezone=True))
+    result_meta = Column(JSON)
+    error_message = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("idx_task_queue_claim", "stage", "status", "priority", "created_at",
+              postgresql_where=text("status IN ('queued','claimed')")),
+        Index("idx_task_queue_scope", "stage", "scope_type", "scope_id"),
+        Index("idx_task_queue_lease", "lease_expires_at", postgresql_where=text("status = 'claimed'")),
+        Index("uq_task_queue_active_scope", "stage", "scope_type", "scope_id", unique=True,
+              postgresql_where=text("status IN ('queued','claimed','running')")),
+    )
+
+
+class SourceBlob(Base):
+    __tablename__ = "source_blobs"
+    source_id = Column(UUID, ForeignKey("sources.source_id", ondelete="CASCADE"), primary_key=True)
+    sha256_hash = Column(String(64), nullable=False)
+    content_type = Column(String(255), default="application/octet-stream", nullable=False)
+    data = Column(LargeBinary, nullable=False)
+    size_bytes = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (Index("idx_source_blobs_sha", "sha256_hash"),)
+
+
+class SourceText(Base):
+    __tablename__ = "source_text"
+    source_id = Column(UUID, ForeignKey("sources.source_id", ondelete="CASCADE"), primary_key=True)
+    content_hash = Column(String(64), nullable=False)
+    text = Column(Text, nullable=False)
+    char_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    __table_args__ = (Index("idx_source_text_hash", "content_hash"),)

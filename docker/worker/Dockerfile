@@ -18,5 +18,28 @@ COPY worker-requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r /tmp/worker-requirements.txt
 
+# Pre-cache embedding model to avoid runtime downloads
+ARG HF_TOKEN=""
+ENV HF_HOME=/hf_cache \
+    TRANSFORMERS_CACHE=/hf_cache \
+    SENTENCE_TRANSFORMERS_HOME=/hf_cache
+RUN mkdir -p /hf_cache && \
+    python - <<'PY' || true
+from huggingface_hub import snapshot_download
+import os
+token = os.getenv("HF_TOKEN", "")
+try:
+    snapshot_download(
+        repo_id="BAAI/bge-m3",
+        local_dir="/hf_cache/models--BAAI--bge-m3",
+        local_dir_use_symlinks=False,
+        resume_download=True,
+        token=token or None,
+    )
+    print("✅ Pre-cached BAAI/bge-m3")
+except Exception as e:
+    print("⚠️ Model pre-cache failed:", e)
+PY
+
 # Default command: start pipeline
 CMD ["python", "-c", "from notebooks.deepnote_worker import run_pipeline; run_pipeline()"]

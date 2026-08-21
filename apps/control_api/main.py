@@ -21,11 +21,11 @@ app.add_middleware(
 )
 
 # Explicit route registration to avoid router import aliasing issues
-app.include_router(sources.router, prefix="/api/v1", tags=["sources"])
-app.include_router(units.router, prefix="/api/v1", tags=["units"])
-app.include_router(wiki.router, prefix="/api/v1", tags=["wiki"])
-app.include_router(search.router, prefix="/api/v1", tags=["search"])
-app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
+app.include_router(sources.router, tags=["sources"])
+app.include_router(units.router, tags=["units"])
+app.include_router(wiki.router, tags=["wiki"])
+app.include_router(search.router, tags=["search"])
+app.include_router(jobs.router, tags=["jobs"])
 
 # Health check endpoint
 @app.get("/api/v1/health", tags=["health"])

@@ -585,6 +585,10 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
         claimed = await api.post("/tasks/claim", {"worker_id": worker_id, "stages": cfg.get("stages"), "concurrency": concurrency})
         tasks = claimed.get("tasks", []) if isinstance(claimed, dict) else []
         if not tasks:
+            try:
+                await api.post(f"/workers/{worker_id}/heartbeat", {"load": {}})
+            except Exception:
+                pass
             await asyncio.sleep(min(1.0, cfg.get("lease_ttl", 5)))
             continue
         for task in tasks:
@@ -597,11 +601,9 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
                     continue
                 log.info("run start stage=%s task=%s scope=%s", stage, stage_task_id, task.get("scope_id"))
                 result = await handler(api, cfg, task)
-                await api.post("/tasks/complete", {
-                    "task_id": stage_task_id,
-                    "status": "succeeded",
-                    "result": result or {},
-                    "worker_id": worker_id,
+                await api.post(f"/tasks/{task['task_id']}/complete", {
+                    "lease_token": task.get("lease_token"),
+                    "result_meta": result or {},
                 })
                 log.info("run ok stage=%s task=%s result=%s", stage, stage_task_id, result)
             except Exception as exc:

@@ -29,6 +29,7 @@ COPY workers /app/workers
 COPY migrations /app/migrations
 COPY docker /app/docker
 COPY worker-requirements.txt /app/worker-requirements.txt
+COPY rag-policies /app/policies
 
 # Keep image minimal; no build tools in final stage
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

@@ -239,33 +239,81 @@ async def handle_extract(api: ApiClient, cfg: dict, task: dict) -> dict:
     raw = await api.get_bytes(f"/sources/{source_id}/blob")
     meta = await api.get(f"/sources/by-id/{source_id}")
     mime = (meta or {}).get("mime_type", "") or ""
-    text = await _extract_text(raw, mime)
+    file_name = (meta or {}).get("file_name", "") or ""
+    # Rich documents (PDF/DOCX/PPTX/EPUB/images) go through Docling → structured
+    # Markdown; plain text/code stays on a native UTF-8 path (plan §6.3).
+    from workers.gpu_worker.docling_extract import extract_document
+    result = extract_document(raw, mime, file_name)
+    text = result["text"]
     await api.post_bytes(f"/sources/{source_id}/text", text.encode("utf-8"),
                          "text/plain; charset=utf-8")
-    return {"chars": len(text), "mime_type": mime}
+    return {"chars": len(text), "mime_type": mime, "engine": result["engine"]}
 
 
 async def handle_chunk(api: ApiClient, cfg: dict, task: dict) -> dict:
     source_id = task["scope_id"]
-    raw = await api.get_bytes(f"/sources/{source_id}/text")
-    text = raw.decode("utf-8", errors="replace")
-    from workers.gpu_worker.chunker import chunk_markdown
-    chunks = chunk_markdown(source_id, text)
-    units = [
-        {
-            "doc_id": source_id,
-            "unit_index": c.chunk_index,
-            "unit_type": "markdown_chunk",
-            "heading_path": c.heading_path,
-            "raw_text": c.content,
-            "clean_text": c.content,
-            "content_hash": await _hash_text(c.content),
-        }
-        for c in chunks
-    ]
+    meta = await api.get(f"/sources/by-id/{source_id}")
+    mime = (meta or {}).get("mime_type", "") or ""
+    file_name = (meta or {}).get("file_name", "") or ""
+
+    from workers.gpu_worker.docling_extract import (
+        chunk_document,
+        docling_available,
+        uses_docling,
+    )
+
+    units: list[dict] = []
+    engine = "heading"
+    # Rich documents get Docling HybridChunker chunks with page/bbox provenance
+    # (docling.ai RAG recipe); everything else stays on the heading chunker.
+    if uses_docling(mime) and docling_available():
+        try:
+            raw = await api.get_bytes(f"/sources/{source_id}/blob")
+            docling_chunks = chunk_document(raw, mime, file_name)
+            if docling_chunks:
+                units = [
+                    {
+                        "doc_id": source_id,
+                        "unit_index": i,
+                        "unit_type": "docling_chunk",
+                        "heading_path": c["heading_path"],
+                        "raw_text": c["raw_text"],
+                        "clean_text": c["clean_text"],
+                        "page_number": c.get("page_number"),
+                        "bbox_coords": c.get("bbox_coords"),
+                        "content_hash": await _hash_text(c["clean_text"]),
+                    }
+                    for i, c in enumerate(docling_chunks)
+                ]
+                engine = "docling"
+        except Exception as e:
+            log.warning(
+                "docling chunking failed for %s (%s); falling back to heading chunker",
+                source_id,
+                e,
+            )
+
+    if not units:
+        raw = await api.get_bytes(f"/sources/{source_id}/text")
+        text = raw.decode("utf-8", errors="replace")
+        from workers.gpu_worker.chunker import chunk_markdown
+        chunks = chunk_markdown(source_id, text)
+        units = [
+            {
+                "doc_id": source_id,
+                "unit_index": c.chunk_index,
+                "unit_type": "markdown_chunk",
+                "heading_path": c.heading_path,
+                "raw_text": c.content,
+                "clean_text": c.content,
+                "content_hash": await _hash_text(c.content),
+            }
+            for c in chunks
+        ]
+
     if units:
         await api.post("/units", {"source_id": source_id, "units": units})
-    return {"chunks": len(units)}
+    return {"chunks": len(units), "engine": engine}
 
 
 async def handle_embed(api: ApiClient, cfg: dict, task: dict) -> dict:
@@ -527,3 +575,47 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
     worker_token = reg["token"]
     # From here on authenticate with the per-worker token (plan §13).
     api.set_token(worker_token)
+
+    # ------------------------------------------------------------------
+    # Main task loop
+    # ------------------------------------------------------------------
+    concurrency = int(cfg.get("max_concurrent", 1) or 1)
+    log.info("worker started id=%s stages=%s concurrency=%s", worker_id, cfg.get("stages"), concurrency)
+    while True:
+        claimed = await api.post("/tasks/claim", {"worker_id": worker_id, "stages": cfg.get("stages"), "concurrency": concurrency})
+        tasks = claimed.get("tasks", []) if isinstance(claimed, dict) else []
+        if not tasks:
+            await asyncio.sleep(min(1.0, cfg.get("lease_ttl", 5)))
+            continue
+        for task in tasks:
+            stage = task.get("stage", "unknown")
+            stage_task_id = task.get("task_id")
+            try:
+                handler = STAGE_HANDLERS.get(stage)
+                if handler is None:
+                    log.warning("unsupported stage=%s task=%s", stage, stage_task_id)
+                    continue
+                log.info("run start stage=%s task=%s scope=%s", stage, stage_task_id, task.get("scope_id"))
+                result = await handler(api, cfg, task)
+                await api.post("/tasks/complete", {
+                    "task_id": stage_task_id,
+                    "status": "succeeded",
+                    "result": result or {},
+                    "worker_id": worker_id,
+                })
+                log.info("run ok stage=%s task=%s result=%s", stage, stage_task_id, result)
+            except Exception as exc:
+                log.exception("run failed stage=%s task=%s err=%s", stage, stage_task_id, exc)
+                try:
+                    await api.post("/tasks/complete", {
+                        "task_id": stage_task_id,
+                        "status": "failed",
+                        "error": {"message": str(exc)},
+                        "worker_id": worker_id,
+                    })
+                except Exception:
+                    pass
+
+
+if __name__ == "__main__":
+    asyncio.run(run_worker_forever())

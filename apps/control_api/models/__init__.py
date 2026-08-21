@@ -15,7 +15,9 @@ class Source(Base):
     __tablename__ = "sources"
     source_id = Column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
     drive_item_id = Column(String(255), unique=True, nullable=False)
-    drive_id = Column(String(255), nullable=False)
+    drive_id = Column(String(255))
+    source_type = Column(String(32), default="local", nullable=False)
+    source_url = Column(Text)
     file_path = Column(Text, nullable=False)
     file_name = Column(String, nullable=False)
     mime_type = Column(String(128), nullable=False)
@@ -241,6 +243,10 @@ class PipelineJob(Base):
     items_processed = Column(Integer, default=0)
     items_failed = Column(Integer, default=0)
     log_summary = Column(Text)
+    worker_id = Column(UUID, ForeignKey("workers.worker_id"))
+    stage = Column(String(32))
+    lease_token = Column(UUID)
+    task_id = Column(UUID, ForeignKey("task_queue.task_id"))
     started_at = Column(DateTime(timezone=True), default=func.now())
     completed_at = Column(DateTime(timezone=True))
 

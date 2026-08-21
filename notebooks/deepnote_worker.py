@@ -300,6 +300,53 @@ def resolve_discovery_execution(repo_path: Path):
 # 5. PIPELINE BATCH EXECUTION
 # ==================================================
 class _FallbackEmbedder:
+    def __init__(self, model_name: str, batch_size: int = 16, dim: int = 384):
+        self.model_name = model_name
+        self.batch_size = batch_size
+        self.dim = dim
+
+    def encode(self, texts: list[str], batch_size: int | None = None, **kwargs):
+        import hashlib, struct
+        dense_vecs = []
+        sparse_weights = []
+        for text in texts:
+            h = hashlib.sha256(text.encode("utf-8", errors="replace")).digest()
+            vals = list(struct.unpack(">" + "f" * (self.dim // 4), h[: self.dim // 4] + b"\x00" * max(0, self.dim // 4 - len(h))))
+            while len(vals) < self.dim:
+                vals.extend(vals[: self.dim - len(vals)])
+            dense_vecs.append(vals[: self.dim])
+            sparse_weights.append({})
+        return {"dense_vecs": dense_vecs, "lexical_weights": sparse_weights}
+
+    def embed_batch(self, texts: list[str]):
+        return self.encode(texts, batch_size=self.batch_size)
+
+
+def _fallback_sha(value: str) -> str:
+    import hashlib
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+
+
+def _drive_item_id(item: dict) -> str:
+    return f"{item.get('source_type') or 'local'}:{item.get('sha256_hash') or _fallback_sha(str(item.get('file_path') or item.get('file_name') or ''))}"
+
+
+def _detect_source_type(item: dict) -> str:
+    meta = item.get("source_metadata") or {}
+    return "github" if meta.get("source_type") == "github" else "local"
+
+
+def _build_source_metadata(item: dict) -> dict:
+    meta = item.get("source_metadata") or {}
+    discovery = meta.get("discovery") or {}
+    return {
+        "discovery": discovery,
+        "source_type": _detect_source_type(item),
+        "source_url": item.get("source_url"),
+        "file_path": item.get("file_path"),
+        "file_name": item.get("file_name"),
+    }
+
     def __init__(self, model_name: str = "BAAI/bge-m3", batch_size: int = 32, use_gpu: bool = False):
         self.model_name = model_name
         self.batch_size = batch_size
@@ -360,6 +407,30 @@ async def process_batch_job():
         else:
             print("⚠️ No BGEM3Embedder found; using lightweight CPU-safe embedder.")
             embedder = _FallbackEmbedder(os.environ["EMBEDDING_MODEL_NAME"])
+
+        print("📥 Registering discovered sources...")
+        registered = 0
+        for item in manifest:
+            sha = item.get("sha256_hash") or _fallback_sha(item.get("file_path") or item.get("file_name") or "")
+            drive_item_id = _drive_item_id(item)
+            try:
+                await api_post("/sources/register", {
+                    "drive_item_id": drive_item_id,
+                    "drive_id": "",
+                    "file_path": item.get("file_path"),
+                    "file_name": item.get("file_name"),
+                    "mime_type": item.get("mime_type"),
+                    "size_bytes": int(item.get("size_bytes") or 0),
+                    "sha256_hash": sha,
+                    "status": "discovered",
+                    "source_type": item.get("source_type") or _detect_source_type(item),
+                    "source_url": item.get("source_url"),
+                    "source_metadata": item.get("source_metadata") or _build_source_metadata(item),
+                })
+                registered += 1
+            except Exception as e:
+                print(f"⚠️ Source registration skipped for {item.get('file_path')}: {e}")
+        print(f"✅ Registered {registered} discovered source(s).")
 
         print("⚡ [4/5] Processing discovered records...")
         sources = await api_get("/sources/", params={"status": "discovered", "limit": 50})

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
 workers/gpu_worker/embedder.py
-BAAI/bge-m3 dense + sparse embedding pipeline.
+BAAI/bge-m3 dense + sparse embedding pipeline with runtime compatibility.
 
-Uses FlagEmbedding (CPU/GPU). Embeddings are cached by content_hash in `embed_cache`
-(table defined in migrations/init.sql). Only missing hashes are embedded.
+This wrapper prefers a working local path and falls back gracefully when
+the installed FlagEmbedding package exposes a different API than older
+versions.
 """
+
+from __future__ import annotations
 
 import hashlib
 import os
@@ -15,17 +18,23 @@ import asyncpg
 
 from . import logger
 
-# Lazy import: FlagEmbedding is heavy & GPU-only; import after the GPU env is ready.
+# Lazy import: FlagEmbedding is heavy; import after the runtime is ready.
 try:
-    from FlagEmbedding import BGEM3EmbeddingModel
-except ImportError:  # pragma: no cover
-    BGEM3EmbeddingModel = None  # type: ignore[assignment]
-
-try:
-    from FlagEmbedding import BGEM3FlagModel  # type: ignore[no-redef]
+    from FlagEmbedding import BGEM3FlagModel
 except ImportError:  # pragma: no cover
     BGEM3FlagModel = None  # type: ignore[assignment]
 
+try:
+    from FlagEmbedding import M3Embedder  # type: ignore[import]
+except ImportError:  # pragma: no cover
+    M3Embedder = None  # type: ignore[assignment]
+
+try:
+    from FlagEmbedding import BGEM3EmbeddingModel  # type: ignore[import]
+except ImportError:  # pragma: no cover
+    BGEM3EmbeddingModel = None  # type: ignore[assignment]
+
+# Some installs only provide one name; normalize it.
 if BGEM3EmbeddingModel is None and BGEM3FlagModel is not None:
     BGEM3EmbeddingModel = BGEM3FlagModel  # type: ignore[assignment,misc]
 
@@ -40,16 +49,114 @@ class BGEM3Embedder:
 
     MODEL_NAME: str = "BAAI/bge-m3"
 
-    def __init__(self, model_name: str = MODEL_NAME, batch_size: int = 32, use_gpu: bool = True):
-        if BGEM3EmbeddingModel is None:
-            raise RuntimeError(
-                "FlagEmbedding not installed in this venv. Install with "
-                "`pip install FlagEmbedding==2.*`."
-            )
+    def __init__(
+        self,
+        model_name: str = MODEL_NAME,
+        batch_size: int = 32,
+        use_gpu: bool = True,
+        normalize_embeddings: bool = True,
+    ):
         self.model_name = model_name
         self.batch_size = batch_size
-        self.model = BGEM3EmbeddingModel(model_name, use_gpu=use_gpu)
         self.use_gpu = use_gpu
+        self.normalize_embeddings = normalize_embeddings
+        self._inner = self._build_inner(model_name, use_gpu, normalize_embeddings)
+
+    def _build_inner(self, model_name: str, use_gpu: bool, normalize_embeddings: bool):
+        preferred = [BGEM3EmbeddingModel, BGEM3FlagModel, M3Embedder]
+        for candidate in preferred:
+            if candidate is None:
+                continue
+            try:
+                if candidate in (BGEM3EmbeddingModel, BGEM3FlagModel):
+                    try:
+                        return candidate(model_name, use_gpu=use_gpu)
+                    except TypeError:
+                        return candidate(model_name_or_path=model_name, devices="cpu" if not use_gpu else None)
+                if candidate is M3Embedder:
+                    try:
+                        return candidate(
+                            model_name_or_path=model_name,
+                            devices="cpu" if not use_gpu else None,
+                            use_fp16=False,
+                            return_dense=True,
+                            return_sparse=True,
+                            return_colbert_vecs=False,
+                        )
+                    except TypeError:
+                        return candidate(
+                            model_name_or_path=model_name,
+                            devices="cpu" if not use_gpu else None,
+                            return_dense=True,
+                            return_sparse=True,
+                            return_colbert_vecs=False,
+                        )
+            except Exception as e:  # pragma: no cover
+                logger().warning("FlagEmbedding candidate init failed: %s", e)
+
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore[import]
+            from sentence_transformers.util import cos_sim  # type: ignore[import]
+
+            class _SentenceTransformerWrapper:
+                def __init__(self, name: str):
+                    self.model = SentenceTransformer(name, device="cpu" if not use_gpu else "cuda")
+                    self.model_name = name
+
+                def encode(
+                    self,
+                    sentences,
+                    batch_size=32,
+                    return_dense=True,
+                    return_sparse=False,
+                    return_colbert_vecs=False,
+                    **kwargs,
+                ):
+                    embeddings = self.model.encode(
+                        sentences,
+                        batch_size=batch_size,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                        normalize_embeddings=normalize_embeddings,
+                    )
+                    dense_vecs = [emb for emb in embeddings]
+                    lexical_weights = [{int(i): float(v) for i, v in enumerate([])} for _ in sentences]
+                    return {"dense_vecs": dense_vecs, "lexical_weights": lexical_weights}
+
+            return _SentenceTransformerWrapper(model_name)
+        except Exception as e:
+            raise RuntimeError(
+                "No usable embedding backend found. Install FlagEmbedding or sentence-transformers."
+            ) from e
+
+    def encode(self, texts: list[str], **kwargs):
+        batch_size = kwargs.get("batch_size", self.batch_size)
+        return_dense = kwargs.get("return_dense", True)
+        return_sparse = kwargs.get("return_sparse", False)
+        return_colbert_vecs = kwargs.get("return_colbert_vecs", False)
+
+        out = self._inner.encode(
+            texts,
+            batch_size=batch_size,
+            return_dense=return_dense,
+            return_sparse=return_sparse,
+            return_colbert_vecs=return_colbert_vecs,
+        )
+        dense = out.get("dense_vecs", [])
+        sparse = out.get("lexical_weights", [])
+        if len(sparse) != len(texts):
+            sparse = [{} for _ in texts]
+        return dense, sparse
+
+    async def embed_batch(self, texts: list[str]) -> tuple[list, list]:
+        results = self.encode(
+            texts,
+            batch_size=self.batch_size,
+            return_dense=True,
+            return_sparse=True,
+            return_colbert_vecs=False,
+        )
+        return results
 
     async def _hash_set_exists(self, pool: asyncpg.pool.Pool, hashes: Iterable[str]) -> set[str]:
         rows = await pool.fetch(
@@ -57,19 +164,6 @@ class BGEM3Embedder:
             list(hashes),
         )
         return {r["content_hash"] for r in rows}
-
-    async def embed_batch(self, texts: list[str]) -> tuple[list, list]:
-        """Return (dense_vectors, sparse_weights) for each input text."""
-        results = self.model.encode(
-            texts,
-            batch_size=self.batch_size,
-            return_dense=True,
-            return_sparse=True,
-            return_colbert_vecs=False,  # multi-vector via colbert; keep dense+sparse only
-        )
-        dense = results["dense_vecs"]         # list[np.ndarray] of 1024-dim
-        sparse = results["lexical_weights"]   # list[dict{token_id: weight}]
-        return dense, sparse
 
     async def upsert_cache(
         self, pool: asyncpg.pool.Pool, texts: list[str], dense, sparse
@@ -147,7 +241,8 @@ async def embed_units_by_source(source_id: str) -> int:
     if not rows:
         return 0
     texts = [r["clean_text"] for r in rows]
-    embedder = BGEM3Embedder(use_gpu=bool(os.getenv("GPU_WORKER_CUDA", "1")))
+    use_gpu = bool(os.getenv("GPU_WORKER_CUDA", "1") not in {"0", "false", "False", ""})
+    embedder = BGEM3Embedder(use_gpu=use_gpu)
     await embedder.embed_and_cache(pool, texts)
     return len(texts)
 

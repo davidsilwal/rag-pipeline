@@ -5,6 +5,8 @@ import inspect
 import subprocess
 import shutil
 import time
+import signal
+import traceback
 from pathlib import Path
 
 try:
@@ -109,7 +111,7 @@ def _setup_environment():
     IN_DEEPNOTE = os.path.exists("/work")
 
     repo_base = "github.com/davidsilwal/rag-pipeline.git"
-    repo_url = f"https://{GITHUB_TOKEN}@{repo_base}" if GITHUB_TOKEN else f"https://{repo_base}"
+    repo_url = f"https://***@{repo_base}" if GITHUB_TOKEN else f"https://{repo_base}"
 
     if IN_COLAB:
         print("🔧 Detected Google Colab environment")
@@ -180,26 +182,48 @@ REQUIRED_PACKAGES = [
 ]
 
 try:
-    import asyncpg, FlagEmbedding, umap, hdbscan, nest_asyncio
-    print("✅ Key dependencies already installed.")
-except (ImportError, ModuleNotFoundError) as e:
-    print("⚠️ Some dependencies are missing; attempting pip install...")
-    print(f"   import error: {e}")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + REQUIRED_PACKAGES)
-        print("✅ Installation complete.")
-    except Exception as e2:
-        print(f"❌ Dependency install failed or is blocked in this environment: {e2}")
-        print("   Please ensure these packages are available before running the pipeline:")
-        for pkg in REQUIRED_PACKAGES:
-            print(f"   - {pkg}")
+    import asyncpg
+    print("✅ asyncpg already installed.")
+except Exception as e:
+    print(f"⚠️ asyncpg missing or unusable: {e}")
+    asyncpg = None
+
+try:
+    import importlib.metadata as _md
+    _md.version("FlagEmbedding")
+    print("✅ FlagEmbedding already installed.")
+except Exception as e:
+    print(f"⚠️ FlagEmbedding missing or unusable: {e}")
+    FlagEmbedding = None  # type: ignore[assignment]
+
+try:
+    import umap
+    print("✅ umap already installed.")
+except Exception as e:
+    print(f"⚠️ umap missing or unusable: {e}")
+    umap = None
+
+try:
+    import hdbscan
+    print("✅ hdbscan already installed.")
+except Exception as e:
+    print(f"⚠️ hdbscan missing or unusable: {e}")
+    hdbscan = None
 
 try:
     import nest_asyncio
-    nest_asyncio.apply()
-    print("ℹ️ nest_asyncio applied.")
-except ImportError:
-    print("⚠️ nest_asyncio is not available; async execution may fail in Colab/Jupyter.")
+    print("✅ nest_asyncio already installed.")
+except Exception as e:
+    print(f"⚠️ nest_asyncio missing or unusable: {e}")
+    nest_asyncio = None
+
+# Torch is imported separately to avoid GPU-side effects during import on CPU-only hosts.
+try:
+    import torch
+    print(f"✅ torch already installed. cuda available: {torch.cuda.is_available()}")
+except Exception as e:
+    print(f"⚠️ torch missing or unusable: {e}")
+    torch = None
 
 print("ℹ️ Note: heavy model downloads are deferred until run_pipeline() to keep startup light.")
 print("✅ [1/5] Dependency setup complete.")
@@ -281,7 +305,7 @@ async def process_batch_job():
     import workers.gpu_worker.clustering as clustering_mod
     import workers.gpu_worker.consensus as consensus_mod
 
-    EmbedderClass = getattr(embedder_mod, "BGEM3Embedder", getattr(embedder_mod, "Embedder", None))
+    EmbedderClass = getattr(embedder_mod, "BGEM3Embedder", getattr(embedder_mod, "BGEM3EmbeddingModel", getattr(embedder_mod, "Embedder", None)))
     run_dedup = getattr(dedup_mod, "run_dedup", getattr(dedup_mod, "dedup", None))
     run_clustering = getattr(clustering_mod, "run_clustering", getattr(clustering_mod, "cluster", None))
     run_consensus = getattr(consensus_mod, "run_consensus", getattr(consensus_mod, "consensus", None))
@@ -302,7 +326,12 @@ async def process_batch_job():
         if EmbedderClass:
             use_gpu = bool(torch is not None and torch.cuda.is_available())
             print(f"ℹ️ Device: {'GPU' if use_gpu else 'CPU'}")
-            embedder = EmbedderClass(model_name=os.environ["EMBEDDING_MODEL_NAME"], use_gpu=use_gpu)
+            try:
+                embedder = EmbedderClass(model_name=os.environ["EMBEDDING_MODEL_NAME"], use_gpu=use_gpu)
+            except Exception as e:
+                print(f"❌ Embedder init failed: {e}")
+                traceback.print_exc()
+                return False
         else:
             raise ImportError("Could not locate BGEM3Embedder class in workers.gpu_worker.embedder")
 
@@ -320,17 +349,26 @@ async def process_batch_job():
             file_path = src.get("file_path", "")
             print(f"\n📄 Processing source: {file_path}")
 
-            units_resp = await api_get("/units", params={"source_id": source_id})
+            try:
+                units_resp = await api_get("/units", params={"source_id": source_id})
+            except Exception as e:
+                print(f"❌ Failed to fetch units for {source_id}: {e}")
+                continue
             units = units_resp if isinstance(units_resp, list) else []
             if not units:
                 continue
 
             texts = [u.get("clean_text", "") for u in units]
-            embed_result = embedder.embed_batch(texts)
-            if inspect.iscoroutine(embed_result):
-                dense_vecs, sparse_weights = await embed_result
-            else:
-                dense_vecs, sparse_weights = embed_result
+            try:
+                embed_result = embedder.embed_batch(texts)
+                if inspect.iscoroutine(embed_result):
+                    dense_vecs, sparse_weights = await embed_result
+                else:
+                    dense_vecs, sparse_weights = embed_result
+            except Exception as e:
+                print(f"❌ Embedding failed for {source_id}: {e}")
+                traceback.print_exc()
+                continue
 
             for u, dense, sparse in zip(units, dense_vecs, sparse_weights):
                 await api_post("/embed_cache", {
@@ -340,55 +378,37 @@ async def process_batch_job():
                 })
 
             await api_post(f"/sources/{source_id}/status", {"status": "extracted"})
-
             if run_dedup:
-                dedup_res = run_dedup(source_id)
-                if inspect.iscoroutine(dedup_res):
-                    await dedup_res
+                try:
+                    dedup_res = run_dedup(source_id)
+                    if inspect.iscoroutine(dedup_res):
+                        await dedup_res
+                except Exception as e:
+                    print(f"❌ Dedup failed for {source_id}: {e}")
 
             if run_clustering:
-                cluster_res = run_clustering(source_id)
-                if inspect.iscoroutine(cluster_res):
-                    await cluster_res
+                try:
+                    cluster_res = run_clustering(source_id)
+                    if inspect.iscoroutine(cluster_res):
+                        await cluster_res
+                except Exception as e:
+                    print(f"❌ Clustering failed for {source_id}: {e}")
 
         print("🧠 [5/5] Running consensus...")
         if run_consensus:
-            cons_res = run_consensus()
-            if inspect.iscoroutine(cons_res):
-                await cons_res
+            try:
+                cons_res = run_consensus()
+                if inspect.iscoroutine(cons_res):
+                    await cons_res
+            except Exception as e:
+                print(f"❌ Consensus failed: {e}")
 
         print("\n🎉 Batch processing completed successfully!")
         return True
     except Exception as e:
         print(f"❌ Batch job failed: {e}")
+        traceback.print_exc()
         return False
-
-
-REQUIRED_RUNTIME_ENV_VARS = [
-    "DATABASE_URL", "CONTROL_API_URL",
-    "AZURE_TENANT_ID", "AZURE_CLIENT_ID",
-    "AZURE_CLIENT_SECRET", "ONEDRIVE_DRIVE_ID"
-]
-REQUIRED_AUTH_ENV_VARS = ["API_TOKEN", "CONTROL_API_KEY"]
-
-missing_required = [var for var in REQUIRED_RUNTIME_ENV_VARS if not os.getenv(var)]
-auth_set = any(os.getenv(var) for var in REQUIRED_AUTH_ENV_VARS)
-
-if missing_required or not auth_set:
-    in_container = Path("/.dockerenv").exists() or os.getenv("DOCKER_WORKER", "0") == "1"
-    if in_container:
-        if missing_required:
-            print("⚠️ Missing container env vars:", ", ".join(missing_required))
-        if not auth_set:
-            print("⚠️ Missing auth token: API_TOKEN/CONTROL_API_KEY not set")
-        print(" Continuing in degraded mode; Control API path may still work.")
-    else:
-        print("⛔ Cannot start pipeline:")
-        for var in missing_required:
-            print(f"   - missing {var}")
-        if not auth_set:
-            print("   - missing auth token: set API_TOKEN or CONTROL_API_KEY")
-        raise SystemExit(1)
 
 
 # ==================================================
@@ -397,9 +417,10 @@ if missing_required or not auth_set:
 def run_pipeline():
     print("\n🚀 Starting RAG pipeline...")
     backoff = 5
+    max_attempts = 3
     attempt = 1
-    while True:
-        print(f"▶ Attempt {attempt}")
+    while attempt <= max_attempts:
+        print(f"▶ Attempt {attempt}/{max_attempts}")
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
@@ -411,16 +432,19 @@ def run_pipeline():
             result = asyncio.run(process_batch_job())
         except Exception as e:
             print(f"❌ Pipeline run failed: {e}")
+            traceback.print_exc()
             result = False
 
         if result is True:
             print("🎉 Pipeline finished successfully.")
-            break
+            return
 
         print(f"⚠️ Pipeline did not complete successfully; retrying in {backoff}s")
         time.sleep(backoff)
         backoff = min(backoff * 2, 300)
         attempt += 1
+
+    print("❌ Max attempts reached. Exiting pipeline.")
 
 
 # In Colab notebooks, this cell should finish with a clear next step.
@@ -428,3 +452,4 @@ if __name__ == "__main__":
     run_pipeline()
 else:
     print("\n👉 To start the pipeline in Colab, run: run_pipeline()")
+

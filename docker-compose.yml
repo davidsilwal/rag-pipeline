@@ -94,10 +94,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       API_TOKEN: ${API_TOKEN}
       CONTROL_API_URL: http://control-api:8000/api/v1
+      DOCKER_WORKER: "1"
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
       ONEDRIVE_DRIVE_ID: ${ONEDRIVE_DRIVE_ID}
+      ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
+      LOCAL_LLM_MODEL: free
     depends_on:
       postgres:
         condition: service_healthy
@@ -105,6 +108,8 @@ services:
         condition: service_healthy
       control-api:
         condition: service_started
+    volumes:
+      - .:/workspace
 
 volumes:
   pg_data:

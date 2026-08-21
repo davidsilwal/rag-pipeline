@@ -371,12 +371,20 @@ missing_required = [var for var in REQUIRED_RUNTIME_ENV_VARS if not os.getenv(va
 auth_set = any(os.getenv(var) for var in REQUIRED_AUTH_ENV_VARS)
 
 if missing_required or not auth_set:
-    print("⛔ Cannot start pipeline:")
-    for var in missing_required:
-        print(f"   - missing {var}")
-    if not auth_set:
-        print("   - missing auth token: set API_TOKEN or CONTROL_API_KEY")
-    raise SystemExit(1)
+    in_container = Path("/.dockerenv").exists() or os.getenv("DOCKER_WORKER", "0") == "1"
+    if in_container:
+        if missing_required:
+            print("⚠️ Missing container env vars:", ", ".join(missing_required))
+        if not auth_set:
+            print("⚠️ Missing auth token: API_TOKEN/CONTROL_API_KEY not set")
+        print(" Continuing in degraded mode; Control API path may still work.")
+    else:
+        print("⛔ Cannot start pipeline:")
+        for var in missing_required:
+            print(f"   - missing {var}")
+        if not auth_set:
+            print("   - missing auth token: set API_TOKEN or CONTROL_API_KEY")
+        raise SystemExit(1)
 
 
 # ==================================================

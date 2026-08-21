@@ -83,9 +83,11 @@ services:
     build:
       context: .
       dockerfile: docker/worker/Dockerfile
+      args:
+        HF_TOKEN: ${HF_TOKEN}
     image: rag-pipeline-worker:latest
-    restart: unless-stopped
-    mem_limit: 1800m
+    restart: on-failure
+    mem_limit: 4096m
     environment:
       GPU_WORKER_CUDA: "0"
       CUDA_VISIBLE_DEVICES: ""
@@ -95,6 +97,7 @@ services:
       API_TOKEN: ${API_TOKEN}
       CONTROL_API_URL: http://control-api:8000/api/v1
       DOCKER_WORKER: "1"
+      HF_TOKEN: ${HF_TOKEN}
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}

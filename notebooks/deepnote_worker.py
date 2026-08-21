@@ -349,9 +349,9 @@ def _build_source_metadata(item: dict) -> dict:
 
 
 async def _compile_wiki_pages(api_get, api_post):
-    sources = await api_get("/sources/", params={"status": "extracted", "limit": 200}) or []
+    sources = await api_get("/sources/", params={"limit": 200}) or []
     if not isinstance(sources, list) or not sources:
-        print("ℹ️ No extracted sources to compile into wiki pages.")
+        print("ℹ️ No sources to compile into wiki pages.")
         return []
 
     compiled = []
@@ -362,6 +362,11 @@ async def _compile_wiki_pages(api_get, api_post):
         units = await api_get("/units/", params={"source_id": source_id}) or []
         if not isinstance(units, list) or not units:
             continue
+        status = src.get("status") or ""
+        if status in {"active", "archived", "error"}:
+            print(f"ℹ️ Skipping {source_id}: status={status}")
+            continue
+
         file_path = src.get("file_path") or units[0].get("file_path") or ""
         title = Path(file_path).name or "Untitled"
         chunks = []

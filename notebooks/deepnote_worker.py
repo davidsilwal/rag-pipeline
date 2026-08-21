@@ -395,4 +395,7 @@ def run_pipeline():
 
 
 # In Colab notebooks, this cell should finish with a clear next step.
-print("\n👉 To start the pipeline in Colab, run: run_pipeline()")
+if __name__ == "__main__":
+    run_pipeline()
+else:
+    print("\n👉 To start the pipeline in Colab, run: run_pipeline()")

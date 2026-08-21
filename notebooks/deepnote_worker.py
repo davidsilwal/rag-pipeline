@@ -466,7 +466,7 @@ async def process_batch_job():
             print(f"\n📄 Processing source: {file_path}")
 
             try:
-                units_resp = await api_get("/units", params={"source_id": source_id})
+                units_resp = await api_get("/units/", params={"source_id": source_id})
             except Exception as e:
                 print(f"❌ Failed to fetch units for {source_id}: {e}")
                 continue

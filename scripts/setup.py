@@ -29,7 +29,7 @@ def install_packages():
         "numpy>=1.24.0",
         "pandas>=2.2.0",
         # Extraction
-        "python-docling>=0.29.0",
+        "docling>=2.0.0",
         "MarkItDown[pdf,docx,eml,msg,html]≥0.0.1",
         "extract-msg>=0.25",
         "beautifulsoup4>=4.12.0",

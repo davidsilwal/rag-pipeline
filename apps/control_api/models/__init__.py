@@ -15,7 +15,7 @@ class Source(Base):
     __tablename__ = "sources"
     source_id = Column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
     drive_item_id = Column(String(255), unique=True, nullable=False)
-    drive_id = Column(String(255))
+    drive_id = Column(String(255), nullable=True)
     source_type = Column(String(32), default="local", nullable=False)
     source_url = Column(Text)
     file_path = Column(Text, nullable=False)

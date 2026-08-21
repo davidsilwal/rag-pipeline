@@ -41,5 +41,6 @@ except Exception as e:
     print("⚠️ Model pre-cache failed:", e)
 PY
 
-# Default command: start pipeline
-CMD ["python", "-c", "from notebooks.deepnote_worker import run_pipeline; run_pipeline()"]
+# Default command: canonical multi-worker task loop (plan §9).
+# The notebook path (notebooks/deepnote_worker.py) remains for Colab/Deepnote.
+CMD ["python", "-m", "workers.runner"]

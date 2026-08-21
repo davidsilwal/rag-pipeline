@@ -117,7 +117,7 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                         "content_hash": chunk.get("content_hash") or "",
                         "dense_vector": chunk.get("dense_vector"),
                         "sparse_weights": chunk.get("sparse_weights"),
-                        "metadata": json.dumps(chunk.get("metadata") or chunk.get("chunk_metadata") or {}),
+                        "chunk_metadata": json.dumps(chunk.get("metadata") or chunk.get("chunk_metadata") or {}),
                     },
                 )
     return {"pages": len(items), "chunks": sum(len(page.get("chunks") or []) for page in items)}

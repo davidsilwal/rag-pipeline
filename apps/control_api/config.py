@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 import warnings
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -37,10 +37,14 @@ class Settings(BaseSettings):
 
     embedding_model_name: str = Field("BAAI/bge-m3", env="EMBEDDING_MODEL_NAME")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    # Ignore unrelated env vars (Colab/Deepnote hosts export many); only the
+    # declared fields are read. This also keeps tests robust to host env.
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
     @model_validator(mode="after")
     def check_azure_secret_not_real(self) -> "Settings":

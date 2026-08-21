@@ -25,7 +25,7 @@ setup(
         "hdbscan>=0.8.39",
         "numpy>=1.24.0",
         "pandas>=2.2.0",
-        "python-docling>=0.29.0",
+        "docling>=2.0.0",
         "markitdown[pdf,docx,eml,msg,html]>=0.0.1",
         "extract-msg>=0.25",
         "beautifulsoup4>=4.12.0",

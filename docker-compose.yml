@@ -92,7 +92,11 @@ services:
       GPU_WORKER_CUDA: "0"
       CUDA_VISIBLE_DEVICES: ""
       EMBEDDING_MODEL_NAME: BAAI/bge-m3
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
+      EMBED_BACKEND: ${EMBED_BACKEND:-auto}
+      EMBED_ALLOW_CPU: ${EMBED_ALLOW_CPU:-0}
+      # Worker gpu_worker modules use asyncpg directly (NOT SQLAlchemy), so a
+      # plain postgresql:// URL is required (asyncpg rejects +asyncpg scheme).
+      DATABASE_URL: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
       REDIS_URL: redis://redis:6379/0
       API_TOKEN: ${API_TOKEN}
       CONTROL_API_URL: http://control-api:8000/api/v1
@@ -103,10 +107,12 @@ services:
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
       ONEDRIVE_DRIVE_ID: ${ONEDRIVE_DRIVE_ID}
       ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
+      LOCAL_SOURCE_DIR: /root/repos
       LOCAL_LLM_MODEL: free
     volumes:
       - .:/workspace
       - ./policies:/app/policies
+      - /root/repos:/root/repos:ro
     depends_on:
       postgres:
         condition: service_healthy

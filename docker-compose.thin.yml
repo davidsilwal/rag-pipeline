@@ -1,0 +1,36 @@
+# Side-by-side thin worker (Rust, containerized — ~10 MB image, 96 MB mem limit).
+# Merge with the main stack and run alongside the fat Python worker:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.thin.yml up -d worker-thin
+#
+# Run N thin workers (each gets a unique default name via container HOSTNAME):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.thin.yml up -d --scale worker-thin=3 worker-thin
+
+services:
+  worker-thin:
+    build:
+      context: ./workers/rust_thin
+      dockerfile: Dockerfile
+    image: rag-pipeline-worker-thin:latest
+    restart: unless-stopped
+    mem_limit: 96m
+    environment:
+      CONTROL_API_URL: http://control-api:8000/api/v1
+      API_TOKEN: ${API_TOKEN}
+      # Do NOT set WORKER_NAME here — leave it to the container HOSTNAME so
+      # `--scale` works; set it explicitly for a single named instance.
+      STAGES_ENABLED: discover,extract,chunk
+      DISCOVER_ROOT: /workspace
+      LONG_POLL: "1"
+      TASK_LEASE_TTL_SECS: "120"
+      MAX_CLAIM: "1"
+      POLL_INTERVAL_SECS: "30"
+      RUST_LOG: info
+    volumes:
+      # Same read-only workspace mount the fat worker uses — thin nodes scan
+      # it and upload only NEW content hashes.
+      - .:/workspace:ro
+    depends_on:
+      control-api:
+        condition: service_started

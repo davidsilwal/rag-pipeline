@@ -1,0 +1,28 @@
+[package]
+name = "rust-thin-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-lightweight Rust worker for the RAG pipeline (T2 relay profile, containerized). Runs side-by-side with the fat Python worker."
+license = "MIT"
+
+# Deliberately tiny dependency set: blocking ureq (rustls TLS, no openssl),
+# serde/serde_json, sha2, walkdir. NO tokio, NO async runtime, NO DB driver,
+# NO torch/models. Target image ~8-10 MB.
+[dependencies]
+ureq = { version = "2.10", default-features = false, features = ["tls", "gzip", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+walkdir = "2"
+libc = "0.2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+ctrlc = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"     # smaller static binary; abort on panic is fine for a worker process
+strip = true

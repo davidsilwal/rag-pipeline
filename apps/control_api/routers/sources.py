@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -83,7 +84,7 @@ async def register_item(payload: RegisterRequest, _tok: str = Depends(require_an
                 "size_bytes": payload.size_bytes,
                 "sha256_hash": payload.sha256_hash,
                 "status": payload.status,
-                "source_metadata": payload.source_metadata or {},
+                "source_metadata": json.dumps(payload.source_metadata or {}),
             },
         )
         row = result.first()
@@ -98,10 +99,39 @@ async def list_sources(status: str = "discovered", limit: int = 50):
     engine = get_engine()
     async with engine.connect() as conn:
         result = await conn.execute(
-            select(Source).where(Source.status == status).limit(limit)
+            select(
+                Source.source_id,
+                Source.drive_item_id,
+                Source.drive_id,
+                Source.source_type,
+                Source.source_url,
+                Source.file_path,
+                Source.file_name,
+                Source.mime_type,
+                Source.size_bytes,
+                Source.sha256_hash,
+                Source.status,
+                Source.source_metadata,
+            ).where(Source.status == status).limit(limit)
         )
-        rows = result.scalars().all()
-    return rows
+        rows = result.mappings().all()
+    return [
+        {
+            "source_id": str(row["source_id"]),
+            "drive_item_id": row["drive_item_id"],
+            "drive_id": row["drive_id"],
+            "file_path": row["file_path"],
+            "file_name": row["file_name"],
+            "mime_type": row["mime_type"],
+            "size_bytes": row["size_bytes"],
+            "sha256_hash": row["sha256_hash"],
+            "status": row["status"],
+            "source_type": row.get("source_type") or "local",
+            "source_url": row.get("source_url"),
+            "source_metadata": row["source_metadata"] or {},
+        }
+        for row in rows
+    ]
 
 
 @router.get("/{drive_item_id}", summary="Get source by OneDrive item ID")

@@ -392,7 +392,26 @@ async def process_batch_job():
 
     try:
         print("\n🔍 [3/5] Running discovery on workspace...")
-        manifest = resolve_discovery_execution(REPO_PATH)
+        manifest = resolve_discovery_execution(REPO_PATH) or []
+
+        print("🌐 Checking for registered GitHub/local sources to ingest...")
+        try:
+            from workers.gpu_worker.source_ingest import ingest as ingest_sources
+            registered_sources = await api_get("/sources/", params={"status": "discovered", "limit": 200}) or []
+            github_sources = [s for s in registered_sources if isinstance(s, dict) and s.get("source_type") == "github" and s.get("source_url")]
+            if github_sources:
+                print(f"🔗 Ingesting {len(github_sources)} GitHub source(s)...")
+                for src in github_sources:
+                    try:
+                        extra = ingest_sources("github", src["source_url"], Path("/workspace/_ingest_tmp"))
+                        manifest.extend(extra)
+                        await api_post(f"/sources/{src['source_id']}/status", {"status": "downloaded"})
+                    except Exception as e:
+                        print(f"⚠️ GitHub ingest failed for {src.get('source_url')}: {e}")
+            else:
+                print("ℹ️ No GitHub sources to ingest.")
+        except Exception as e:
+            print(f"⚠️ Source ingestion skipped: {e}")
 
         if EmbedderClass:
             use_gpu = bool(torch is not None and torch.cuda.is_available())

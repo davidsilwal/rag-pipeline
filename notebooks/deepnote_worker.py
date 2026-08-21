@@ -347,27 +347,64 @@ def _build_source_metadata(item: dict) -> dict:
         "file_name": item.get("file_name"),
     }
 
-    def __init__(self, model_name: str = "BAAI/bge-m3", batch_size: int = 32, use_gpu: bool = False):
-        self.model_name = model_name
-        self.batch_size = batch_size
-        self.use_gpu = use_gpu
 
-    def encode(self, texts: list[str], batch_size: int = 32, return_dense: bool = True, return_sparse: bool = False, return_colbert_vecs: bool = False, **kwargs):
-        import hashlib
-        dense_vecs = []
-        lexical_weights = []
-        for text in texts:
-            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            seed = int(digest[:12], 16)
-            vec = []
-            for i in range(1024):
-                vec.append(((seed ^ (i * 31)) % 2000) / 2000.0)
-            dense_vecs.append(vec)
-            lexical_weights.append({i % 1000: abs(((seed ^ (i * 37)) % 2000) / 2000.0) for i in range(min(32, len(text.split())))})
-        return {"dense_vecs": dense_vecs, "lexical_weights": lexical_weights}
+async def _compile_wiki_pages(api_get, api_post):
+    sources = await api_get("/sources/", params={"status": "extracted", "limit": 200}) or []
+    if not isinstance(sources, list) or not sources:
+        print("ℹ️ No extracted sources to compile into wiki pages.")
+        return []
 
-    def embed_batch(self, texts: list[str]):
-        return self.encode(texts, batch_size=self.batch_size, return_dense=True, return_sparse=True)
+    compiled = []
+    for src in sources:
+        source_id = str(src.get("source_id") or src.get("id") or "")
+        if not source_id:
+            continue
+        units = await api_get("/units/", params={"source_id": source_id}) or []
+        if not isinstance(units, list) or not units:
+            continue
+        file_path = src.get("file_path") or units[0].get("file_path") or ""
+        title = Path(file_path).name or "Untitled"
+        chunks = []
+        for idx, unit in enumerate(units):
+            text = unit.get("clean_text") or unit.get("raw_text") or ""
+            if not text.strip():
+                continue
+            chunks.append({
+                "page_id": source_id,
+                "file_path": file_path,
+                "chunk_index": idx,
+                "content": text,
+                "heading_path": unit.get("heading_path") or [],
+                "content_hash": unit.get("content_hash") or _fallback_sha(text),
+                "chunk_metadata": {
+                    "source_id": source_id,
+                    "unit_id": str(unit.get("unit_id") or ""),
+                    "unit_type": unit.get("unit_type"),
+                }
+            })
+        if not chunks:
+            continue
+        page_payload = {
+            "page_id": source_id,
+            "file_path": file_path,
+            "title": title,
+            "page_type": "source",
+            "domain": "code" if file_path.endswith((".py", ".rs", ".js", ".ts", ".md")) else "docs",
+            "status": "active",
+            "frontmatter": {
+                "source_id": source_id,
+                "source_type": src.get("source_type") or "local",
+                "source_url": src.get("source_url"),
+            },
+            "markdown_body": "\n\n".join(f"## chunk {idx}\n{chunk['content']}" for idx, chunk in enumerate(chunks)),
+            "source_unit_ids": [chunk["chunk_metadata"].get("unit_id") for chunk in chunks if chunk["chunk_metadata"].get("unit_id")],
+            "chunks": chunks,
+        }
+        await api_post("/wiki/pages", page_payload)
+        compiled.append({"page_id": source_id, "title": title, "chunks": len(chunks)})
+
+    print(f"📚 Compiled {len(compiled)} wiki page(s).")
+    return compiled
 
 
 async def process_batch_job():
@@ -529,6 +566,11 @@ async def process_batch_job():
             except Exception as e:
                 print(f"❌ Consensus failed: {e}")
 
+        try:
+            await _compile_wiki_pages(api_get, api_post)
+        except Exception as e:
+            print(f"❌ Wiki compile failed: {e}")
+
         print("\n🎉 Batch processing completed successfully!")
         return True
     except Exception as e:
@@ -581,4 +623,3 @@ if __name__ == "__main__":
     run_pipeline()
 else:
     print("\n👉 To start the pipeline in Colab, run: run_pipeline()")
-

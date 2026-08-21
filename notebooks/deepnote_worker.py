@@ -452,13 +452,23 @@ async def process_batch_job():
         print(f"✅ Registered {registered} discovered source(s).")
 
         print("⚡ [4/5] Processing discovered records...")
-        sources = await api_get("/sources/", params={"status": "discovered", "limit": 50})
-
-        if isinstance(sources, list):
-            print(f"ℹ️ Found {len(sources)} discovered source(s).")
+        active_statuses = ["discovered", "downloaded"]
+        sources = []
+        for st in active_statuses:
+            batch = await api_get("/sources/", params={"status": st, "limit": 200}) or []
+            sources.extend([x for x in batch if isinstance(x, dict)])
+        seen = set()
+        unique_sources = []
+        for src in sources:
+            sid = src.get("source_id") or src.get("id")
+            if sid and sid not in seen:
+                seen.add(sid)
+                unique_sources.append(src)
+        sources = unique_sources
+        if not sources:
+            print("ℹ️ No active discovered/downloaded sources to process.")
         else:
-            print("⚠️ Unexpected /sources response format.")
-            sources = []
+            print(f"ℹ️ Found {len(sources)} active source(s).")
 
         for src in sources:
             source_id = str(src.get("source_id") or src.get("id") or "")

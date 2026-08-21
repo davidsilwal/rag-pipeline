@@ -30,6 +30,56 @@ from services.queue import enqueue_stage
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 
+async def _get_engine():
+    return get_engine()
+
+
+async def _register_source(payload: RegisterRequest, conn=None) -> dict:
+    if conn is None:
+        engine = get_engine()
+        async with engine.begin() as conn:
+            return await _register_source(payload, conn=conn)
+
+    result = await conn.execute(
+        text("""
+            INSERT INTO sources
+                (drive_item_id, drive_id, source_type, source_url, file_path, file_name, mime_type,
+                 size_bytes, sha256_hash, status, source_metadata)
+            VALUES (:drive_item_id, :drive_id, :source_type, :source_url, :file_path, :file_name, :mime_type,
+                    :size_bytes, :sha256_hash, :status, :source_metadata)
+            ON CONFLICT (drive_item_id) DO UPDATE SET
+                drive_id = EXCLUDED.drive_id,
+                source_type = EXCLUDED.source_type,
+                source_url = EXCLUDED.source_url,
+                file_path = EXCLUDED.file_path,
+                file_name = EXCLUDED.file_name,
+                mime_type = EXCLUDED.mime_type,
+                size_bytes = EXCLUDED.size_bytes,
+                sha256_hash = EXCLUDED.sha256_hash,
+                source_metadata = EXCLUDED.source_metadata,
+                updated_at = now()
+            RETURNING source_id
+        """),
+        {
+            "drive_item_id": payload.drive_item_id,
+            "drive_id": payload.drive_id,
+            "source_type": payload.source_type,
+            "source_url": payload.source_url,
+            "file_path": payload.file_path,
+            "file_name": payload.file_name,
+            "mime_type": payload.mime_type,
+            "size_bytes": payload.size_bytes,
+            "sha256_hash": payload.sha256_hash,
+            "status": payload.status,
+            "source_metadata": json.dumps(payload.source_metadata or {}),
+        },
+    )
+    row = result.first()
+    source_id = str(row[0])
+    await enqueue_stage(conn, "extract", "source", source_id, priority=0)
+    return {"status": "registered", "source_id": source_id, "drive_item_id": payload.drive_item_id}
+
+
 class RegisterRequest(BaseModel):
     drive_item_id: str | None = Field(None, description="OneDrive driveItem ID")
     drive_id: str | None = Field(None)
@@ -49,56 +99,77 @@ class StatusRequest(BaseModel):
     error_message: str | None = None
 
 
+class BatchRegisterRequest(BaseModel):
+    items: list[RegisterRequest] = Field(..., min_length=1, max_length=500)
+
+
+class DeleteResponse(BaseModel):
+    status: str
+    source_id: str
+    deleted: bool
+
+
 @router.post("/register", summary="Register a discovered item (idempotent; enqueues extract)")
 async def register_item(payload: RegisterRequest, _tok: str = Depends(require_any_token)):
-    engine = get_engine()
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("""
-                INSERT INTO sources
-                    (drive_item_id, drive_id, source_type, source_url, file_path, file_name, mime_type,
-                     size_bytes, sha256_hash, status, source_metadata)
-                VALUES (:drive_item_id, :drive_id, :source_type, :source_url, :file_path, :file_name, :mime_type,
-                        :size_bytes, :sha256_hash, :status, :source_metadata)
-                ON CONFLICT (drive_item_id) DO UPDATE SET
-                    drive_id = EXCLUDED.drive_id,
-                    source_type = EXCLUDED.source_type,
-                    source_url = EXCLUDED.source_url,
-                    file_path = EXCLUDED.file_path,
-                    file_name = EXCLUDED.file_name,
-                    mime_type = EXCLUDED.mime_type,
-                    size_bytes = EXCLUDED.size_bytes,
-                    sha256_hash = EXCLUDED.sha256_hash,
-                    source_metadata = EXCLUDED.source_metadata,
-                    updated_at = now()
-                RETURNING source_id
-            """),
-            {
-                "drive_item_id": payload.drive_item_id,
-                "drive_id": payload.drive_id,
-                "source_type": payload.source_type,
-                "source_url": payload.source_url,
-                "file_path": payload.file_path,
-                "file_name": payload.file_name,
-                "mime_type": payload.mime_type,
-                "size_bytes": payload.size_bytes,
-                "sha256_hash": payload.sha256_hash,
-                "status": payload.status,
-                "source_metadata": json.dumps(payload.source_metadata or {}),
-            },
+    result = await _register_source(payload)
+    return result
+
+
+@router.post("/register-batch", summary="Batch register sources (max 500)")
+async def register_batch(payload: BatchRegisterRequest, _tok: str = Depends(require_any_token)):
+    results = []
+    async with (await _get_engine()).begin() as conn:
+        for item in payload.items:
+            try:
+                res = await _register_source(item, conn=conn)
+                results.append({"status": "ok", **res})
+            except Exception as e:
+                results.append({"status": "error", "drive_item_id": item.drive_item_id, "detail": str(e)})
+    return {"batch": len(results), "results": results}
+
+
+@router.delete("/{source_id}", summary="Delete a source and related data")
+async def delete_source(source_id: uuid.UUID, _tok: str = Depends(require_any_token)):
+    async with (await _get_engine()).begin() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT source_id FROM sources WHERE source_id = :id"), {"id": source_id}
+            )
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Source not found")
+        await conn.execute(text("DELETE FROM source_blobs WHERE source_id = :id"), {"id": source_id})
+        await conn.execute(text("DELETE FROM source_text WHERE source_id = :id"), {"id": source_id})
+        await conn.execute(
+            text("DELETE FROM sources WHERE source_id = :id RETURNING source_id"), {"id": source_id}
         )
-        row = result.first()
+    return DeleteResponse(status="deleted", source_id=str(source_id), deleted=True)
+
+
+@router.delete("/by-drive-item/{drive_item_id}", summary="Delete a source by drive item ID")
+async def delete_source_by_drive_item(drive_item_id: str, _tok: str = Depends(require_any_token)):
+    async with (await _get_engine()).begin() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT source_id FROM sources WHERE drive_item_id = :id"), {"id": drive_item_id}
+            )
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Source not found")
         source_id = str(row[0])
-        # Producer chaining (§4.5): a registered source enqueues its extract task.
-        await enqueue_stage(conn, "extract", "source", source_id, priority=0)
-    return {"status": "registered", "source_id": source_id, "drive_item_id": payload.drive_item_id}
+        await conn.execute(text("DELETE FROM source_blobs WHERE source_id = :id"), {"id": source_id})
+        await conn.execute(text("DELETE FROM source_text WHERE source_id = :id"), {"id": source_id})
+        await conn.execute(
+            text("DELETE FROM sources WHERE source_id = :id RETURNING source_id"), {"id": source_id}
+        )
+    return DeleteResponse(status="deleted", source_id=source_id, deleted=True)
 
 
 @router.get("/", summary="List sources by status")
-async def list_sources(status: str = "discovered", limit: int = 50):
+async def list_sources(status: str | None = None, limit: int = 50):
     engine = get_engine()
     async with engine.connect() as conn:
-        result = await conn.execute(
+        query = (
             select(
                 Source.source_id,
                 Source.drive_item_id,
@@ -112,8 +183,11 @@ async def list_sources(status: str = "discovered", limit: int = 50):
                 Source.sha256_hash,
                 Source.status,
                 Source.source_metadata,
-            ).where(Source.status == status).limit(limit)
+            ).limit(limit)
         )
+        if status:
+            query = query.where(Source.status == status)
+        result = await conn.execute(query)
         rows = result.mappings().all()
     return [
         {

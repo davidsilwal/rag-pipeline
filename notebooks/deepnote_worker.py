@@ -6,6 +6,11 @@ import subprocess
 import shutil
 from pathlib import Path
 
+try:
+    import torch
+except Exception:
+    torch = None
+
 # ==================================================
 # 0. ENVIRONMENT & SECRETS CONFIGURATION
 # ==================================================
@@ -291,7 +296,9 @@ async def process_batch_job():
         manifest = resolve_discovery_execution(REPO_PATH)
 
         if EmbedderClass:
-            embedder = EmbedderClass(model_name=os.environ["EMBEDDING_MODEL_NAME"], use_gpu=True)
+            use_gpu = bool(torch is not None and torch.cuda.is_available())
+            print(f"ℹ️ Device: {'GPU' if use_gpu else 'CPU'}")
+            embedder = EmbedderClass(model_name=os.environ["EMBEDDING_MODEL_NAME"], use_gpu=use_gpu)
         else:
             raise ImportError("Could not locate BGEM3Embedder class in workers.gpu_worker.embedder")
 

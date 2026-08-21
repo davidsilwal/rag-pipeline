@@ -21,6 +21,14 @@ try:
 except ImportError:  # pragma: no cover
     BGEM3EmbeddingModel = None  # type: ignore[assignment]
 
+try:
+    from FlagEmbedding import BGEM3FlagModel  # type: ignore[no-redef]
+except ImportError:  # pragma: no cover
+    BGEM3FlagModel = None  # type: ignore[assignment]
+
+if BGEM3EmbeddingModel is None and BGEM3FlagModel is not None:
+    BGEM3EmbeddingModel = BGEM3FlagModel  # type: ignore[assignment,misc]
+
 
 def sha256_text(text: str) -> str:
     """SHA-256 hex of clean_text — matches units.content_hash."""
@@ -57,7 +65,7 @@ class BGEM3Embedder:
             batch_size=self.batch_size,
             return_dense=True,
             return_sparse=True,
-            return_colberi=False,  # multi-vector via colbert; keep dense+sparse only
+            return_colbert_vecs=False,  # multi-vector via colbert; keep dense+sparse only
         )
         dense = results["dense_vecs"]         # list[np.ndarray] of 1024-dim
         sparse = results["lexical_weights"]   # list[dict{token_id: weight}]

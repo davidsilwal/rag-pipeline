@@ -7,6 +7,7 @@ import shutil
 import time
 import signal
 import traceback
+import uuid
 from pathlib import Path
 
 try:
@@ -348,6 +349,16 @@ def _build_source_metadata(item: dict) -> dict:
     }
 
 
+def _coerce_uuid(value: str, *, name: str = "") -> str:
+    try:
+        uuid.UUID(str(value))
+        return str(value)
+    except Exception:
+        pass
+    text = f"{name}:{value}" if name else str(value)
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, text))
+
+
 async def _compile_wiki_pages(api_get, api_post):
     sources = await api_get("/sources/", params={"limit": 200}) or []
     if not isinstance(sources, list) or not sources:
@@ -356,7 +367,7 @@ async def _compile_wiki_pages(api_get, api_post):
 
     compiled = []
     for src in sources:
-        source_id = str(src.get("source_id") or src.get("id") or "")
+        source_id = _coerce_uuid(str(src.get("source_id") or src.get("id") or ""), name="source")
         if not source_id:
             continue
         units = await api_get("/units/", params={"source_id": source_id}) or []
@@ -405,7 +416,7 @@ async def _compile_wiki_pages(api_get, api_post):
             "source_unit_ids": [chunk["chunk_metadata"].get("unit_id") for chunk in chunks if chunk["chunk_metadata"].get("unit_id")],
             "chunks": chunks,
         }
-        await api_post("/wiki/pages", page_payload)
+        await api_post("/wiki/pages", {"pages": [page_payload]})
         compiled.append({"page_id": source_id, "title": title, "chunks": len(chunks)})
 
     print(f"📚 Compiled {len(compiled)} wiki page(s).")

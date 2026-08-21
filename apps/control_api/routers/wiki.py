@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 
@@ -85,7 +87,7 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                     "page_type": page.get("page_type"),
                     "domain": page.get("domain"),
                     "status": page.get("status", "active"),
-                    "frontmatter": page.get("frontmatter") or {},
+                    "frontmatter": json.dumps(page.get("frontmatter") or {}),
                     "markdown_body": page.get("markdown_body") or "",
                     "source_unit_ids": page.get("source_unit_ids") or [],
                 },
@@ -95,7 +97,7 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                 await conn.execute(
                     text("""
                     INSERT INTO wiki_chunks
-                        (chunk_id, page_id, file_path, heading_path, chunk_index, content, content_hash, dense_vector, sparse_weights, metadata)
+                        (chunk_id, page_id, file_path, heading_path, chunk_index, content, content_hash, dense_vector, sparse_weights, chunk_metadata)
                     VALUES
                         (:chunk_id, :page_id, :file_path, :heading_path, :chunk_index, :content, :content_hash, :dense_vector, :sparse_weights, :metadata)
                     ON CONFLICT (page_id, chunk_index) DO UPDATE SET
@@ -103,7 +105,7 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                         content_hash = EXCLUDED.content_hash,
                         dense_vector = EXCLUDED.dense_vector,
                         sparse_weights = EXCLUDED.sparse_weights,
-                        metadata = EXCLUDED.metadata
+                        chunk_metadata = EXCLUDED.chunk_metadata
                     """),
                     {
                         "chunk_id": chunk_id,
@@ -115,7 +117,7 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                         "content_hash": chunk.get("content_hash") or "",
                         "dense_vector": chunk.get("dense_vector"),
                         "sparse_weights": chunk.get("sparse_weights"),
-                        "metadata": chunk.get("metadata") or chunk.get("chunk_metadata") or {},
+                        "metadata": json.dumps(chunk.get("metadata") or chunk.get("chunk_metadata") or {}),
                     },
                 )
     return {"pages": len(items), "chunks": sum(len(page.get("chunks") or []) for page in items)}

@@ -101,6 +101,9 @@ services:
       ONEDRIVE_DRIVE_ID: ${ONEDRIVE_DRIVE_ID}
       ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
       LOCAL_LLM_MODEL: free
+    volumes:
+      - .:/workspace
+      - ./policies:/app/policies
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,8 +111,6 @@ services:
         condition: service_healthy
       control-api:
         condition: service_started
-    volumes:
-      - .:/workspace
 
 volumes:
   pg_data:

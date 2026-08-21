@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import subprocess
 import shutil
+import time
 from pathlib import Path
 
 try:
@@ -392,14 +393,31 @@ if missing_required or not auth_set:
 # ==================================================
 def run_pipeline():
     print("\n🚀 Starting RAG pipeline...")
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(process_batch_job())
-        else:
-            loop.run_until_complete(process_batch_job())
-    except RuntimeError:
-        asyncio.run(process_batch_job())
+    backoff = 5
+    attempt = 1
+    while True:
+        print(f"▶ Attempt {attempt}")
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                task = loop.create_task(process_batch_job())
+                result = loop.run_until_complete(task)
+            else:
+                result = loop.run_until_complete(process_batch_job())
+        except RuntimeError:
+            result = asyncio.run(process_batch_job())
+        except Exception as e:
+            print(f"❌ Pipeline run failed: {e}")
+            result = False
+
+        if result is True:
+            print("🎉 Pipeline finished successfully.")
+            break
+
+        print(f"⚠️ Pipeline did not complete successfully; retrying in {backoff}s")
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 300)
+        attempt += 1
 
 
 # In Colab notebooks, this cell should finish with a clear next step.

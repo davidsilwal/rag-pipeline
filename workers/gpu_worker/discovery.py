@@ -22,6 +22,8 @@ DEFAULT_RULES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "polici
 
 def _load_rules(path: str | None = None) -> dict:
     p = path or os.getenv("DISCOVERY_RULES", DEFAULT_RULES_PATH)
+    if not os.path.exists(p):
+        return {"exclude_patterns": [], "project_markers": []}
     with open(p, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 

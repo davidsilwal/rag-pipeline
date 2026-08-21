@@ -1,0 +1,14 @@
+asyncpg
+FlagEmbedding
+torch
+transformers
+scikit-learn
+umap-learn
+hdbscan
+litellm
+pydantic
+httpx
+pyyaml
+psycopg2-binary
+tqdm
+nest_asyncio

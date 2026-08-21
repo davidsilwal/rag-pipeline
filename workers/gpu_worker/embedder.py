@@ -143,7 +143,7 @@ class BGEM3Embedder:
             return_colbert_vecs=return_colbert_vecs,
         )
         dense = out.get("dense_vecs", [])
-        sparse = out.get("lexical_weights", [])
+        sparse = out.get("lexical_weights") or []
         if len(sparse) != len(texts):
             sparse = [{} for _ in texts]
         return dense, sparse

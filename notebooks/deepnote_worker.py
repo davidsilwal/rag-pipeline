@@ -182,13 +182,14 @@ REQUIRED_PACKAGES = [
 try:
     import asyncpg, FlagEmbedding, umap, hdbscan, nest_asyncio
     print("✅ Key dependencies already installed.")
-except ImportError:
+except (ImportError, ModuleNotFoundError) as e:
     print("⚠️ Some dependencies are missing; attempting pip install...")
+    print(f"   import error: {e}")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + REQUIRED_PACKAGES)
         print("✅ Installation complete.")
-    except Exception as e:
-        print(f"❌ Dependency install failed or is blocked in this environment: {e}")
+    except Exception as e2:
+        print(f"❌ Dependency install failed or is blocked in this environment: {e2}")
         print("   Please ensure these packages are available before running the pipeline:")
         for pkg in REQUIRED_PACKAGES:
             print(f"   - {pkg}")
@@ -196,10 +197,12 @@ except ImportError:
 try:
     import nest_asyncio
     nest_asyncio.apply()
+    print("ℹ️ nest_asyncio applied.")
 except ImportError:
     print("⚠️ nest_asyncio is not available; async execution may fail in Colab/Jupyter.")
 
 print("ℹ️ Note: heavy model downloads are deferred until run_pipeline() to keep startup light.")
+print("✅ [1/5] Dependency setup complete.")
 
 
 # ==================================================
@@ -304,7 +307,7 @@ async def process_batch_job():
             raise ImportError("Could not locate BGEM3Embedder class in workers.gpu_worker.embedder")
 
         print("⚡ [4/5] Processing discovered records...")
-        sources = await api_get("/sources", params={"status": "discovered", "limit": 50})
+        sources = await api_get("/sources/", params={"status": "discovered", "limit": 50})
 
         if isinstance(sources, list):
             print(f"ℹ️ Found {len(sources)} discovered source(s).")

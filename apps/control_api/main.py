@@ -5,7 +5,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers import sources, units, wiki, search, jobs
-from routes import api_router
 
 app = FastAPI(
     title="LLM Markdown Wiki Control API",
@@ -21,8 +20,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register API routes
-app.include_router(api_router)
+# Explicit route registration to avoid router import aliasing issues
+app.include_router(sources.router, prefix="/api/v1", tags=["sources"])
+app.include_router(units.router, prefix="/api/v1", tags=["units"])
+app.include_router(wiki.router, prefix="/api/v1", tags=["wiki"])
+app.include_router(search.router, prefix="/api/v1", tags=["search"])
+app.include_router(jobs.router, prefix="/api/v1", tags=["jobs"])
 
 # Health check endpoint
 @app.get("/api/v1/health", tags=["health"])

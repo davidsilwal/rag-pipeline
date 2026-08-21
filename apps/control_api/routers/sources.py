@@ -40,6 +40,15 @@ async def register_item(payload: RegisterRequest):
     return {"status": "registered", "drive_item_id": payload.drive_item_id}
 
 
+@router.get("/", summary="List sources by status")
+async def list_sources(status: str = "discovered", limit: int = 50):
+    engine = get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(select(Source).where(Source.status == status).limit(limit))
+        rows = result.scalars().all()
+    return rows
+
+
 @router.get("/{drive_item_id}", summary="Get source by OneDrive item ID")
 async def get_source(drive_item_id: str):
     engine = get_engine()

@@ -149,6 +149,8 @@ def discover(root: str | Path, rules_path: str | None = None) -> list[dict[str, 
             if _is_ignored_file(fn):
                 continue
             p = Path(dirpath) / fn
+            if not p.exists():
+                continue
             relp = p.relative_to(root)
             content_class, priority = _classify(p, project_type, rel)
             manifest.append(

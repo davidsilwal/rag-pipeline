@@ -220,7 +220,7 @@ async def handle_discover(api: ApiClient, cfg: dict, task: dict) -> dict:
         if await api.head(f"/sources/by-hash/{sha}"):
             skipped += 1
             continue
-        await api.post("/sources/register", {
+        reg = await api.post("/sources/register", {
             "drive_item_id": f"local:{sha}",
             "drive_id": "local",
             "file_path": item["file_path"],
@@ -230,6 +230,12 @@ async def handle_discover(api: ApiClient, cfg: dict, task: dict) -> dict:
             "sha256_hash": sha,
             "status": "discovered",
         })
+        try:
+            raw = pathlib.Path(root, item["file_path"]).read_bytes()
+            sid = (((reg or {}).get("source_id")) if isinstance(reg, dict) else None) or sha
+            await api.post_bytes(f"/sources/{sid}/blob", raw, item["mime_type"] or "application/octet-stream")
+        except Exception:
+            pass
         registered += 1
     return {"registered": registered, "skipped_known": skipped}
 

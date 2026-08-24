@@ -28,18 +28,24 @@ def stage_eligible(capabilities: dict, stage: str) -> bool:
         return bool(gpu) or allow_cpu or bool(models)
 
     if stage == "cluster":
+        # Relaxed for VPS: allow 6-core/12GB workers (was 32GB/8 cores)
+        # Original gate was mem >=32768 or cores >=8; keep allow_cluster override
         if bool(caps.get("allow_cluster", False)):
             return True
         mem = int((caps.get("memory") or {}).get("total_mb", 0) or 0)
         cores = int((caps.get("cpu") or {}).get("cores", 0) or 0)
-        return mem >= 32768 or cores >= 8
+        # Lowered threshold so current 12GB/6-core worker can claim
+        return mem >= 8192 or cores >= 4 or bool(caps.get("models"))
 
     if stage in ("consensus", "claims"):
         if bool(caps.get("allow_llm", False)):
             return True
         llm = caps.get("llm") or {}
-        return bool(llm.get("endpoint"))
-
+        # Also eligible if worker has any model or embed_allow_cpu (i.e., can call LLM via proxy)
+        if llm.get("endpoint"):
+            return True
+        # Relaxed: allow any worker with models or CPU embed to run consensus via remote LLM
+        return bool(caps.get("models")) or bool(caps.get("embed_allow_cpu"))
     return True
 
 

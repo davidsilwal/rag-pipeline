@@ -142,8 +142,18 @@ async def get_worker(worker_id: uuid.UUID, _admin: str = Depends(require_admin_t
     engine = get_engine()
     async with engine.connect() as conn:
         row = (
-            await conn.execute(select(Worker).where(Worker.worker_id == worker_id))
-        ).scalar_one_or_none()
+            await conn.execute(
+                text("""
+                    SELECT w.*,
+                           EXTRACT(EPOCH FROM (now() - w.last_heartbeat))::int AS heartbeat_age_seconds,
+                           (SELECT count(*) FROM task_queue t
+                             WHERE t.leased_by = w.worker_id AND t.status = 'claimed') AS running_tasks
+                    FROM workers w
+                    WHERE w.worker_id = :id
+                """),
+                {"id": worker_id},
+            )
+        ).mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Worker not found")
-    return row
+    return dict(row)

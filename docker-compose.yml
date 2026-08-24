@@ -98,12 +98,13 @@ services:
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
       ONEDRIVE_DRIVE_ID: ${ONEDRIVE_DRIVE_ID}
       ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
-      LOCAL_SOURCE_DIR: /root/repos
+      LOCAL_SOURCE_DIR: /root/.okf/knowledge
       LOCAL_LLM_MODEL: free
     volumes:
       - .:/workspace
       - ./policies:/app/policies
       - /root/repos:/root/repos:ro
+      - /root/.okf:/root/.okf:ro
     depends_on:
       postgres:
         condition: service_healthy

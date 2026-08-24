@@ -237,14 +237,22 @@ async def source_exists_by_hash(sha256: str):
 async def get_source_by_id(source_id: uuid.UUID):
     engine = get_engine()
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                select(Source).where(Source.source_id == source_id)
-            )
-        ).scalar_one_or_none()
+        result = await conn.execute(
+            text(
+                """
+                SELECT source_id, drive_item_id, drive_id, source_type, source_url,
+                       file_path, file_name, mime_type, size_bytes, sha256_hash,
+                       status, error_message, source_metadata
+                FROM sources
+                WHERE source_id = :id
+                """
+            ),
+            {"id": source_id},
+        )
+        row = result.mappings().first()
     if not row:
         raise HTTPException(status_code=404, detail="Source not found")
-    return row
+    return dict(row)
 
 
 @router.post("/{source_id}/blob", summary="Store raw source bytes")

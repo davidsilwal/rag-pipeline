@@ -49,6 +49,7 @@ NEXT_STAGE = {
     "extract": "chunk",
     "chunk": "embed",
     "embed": "dedup",
+    "dedup": "compile",
     "cluster": "consensus",
     "consensus": "graphrag",
     "graphrag": "compile",

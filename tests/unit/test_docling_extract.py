@@ -9,7 +9,9 @@ import pytest
 
 from workers.gpu_worker.docling_extract import (
     _bbox_to_dict,
+    _MIME_SUFFIX_OVERRIDE,
     _provenance,
+    _stage_suffix,
     chunk_document,
     docling_available,
     extract_document,
@@ -129,6 +131,43 @@ def test_chunk_document_raises_without_docling():
         pytest.skip("docling installed")
     with pytest.raises(Exception):
         chunk_document(b"%PDF-1.4", "application/pdf", "report.pdf")
+
+
+# ---------------------------------------------------------------------------
+# MIME suffix override (BUG #5 regression)
+# ---------------------------------------------------------------------------
+
+def test_stage_suffix_uses_override_for_application_x_python():
+    """application/x-python should map to .py, not .bin."""
+    assert _stage_suffix("", "application/x-python") == ".py"
+
+
+def test_stage_suffix_uses_override_for_application_pdf():
+    assert _stage_suffix("", "application/pdf") == ".pdf"
+
+
+def test_stage_suffix_prefers_filename_extension():
+    assert _stage_suffix("report.pdf", "application/octet-stream") == ".pdf"
+
+
+def test_stage_suffix_uses_mimetypes_fallback_for_unknown():
+    """Unknown MIME types without override should use mimetypes.guess_extension."""
+    suffix = _stage_suffix("", "text/csv")
+    assert suffix == ".csv"  # in override table
+
+
+def test_stage_suffix_defaults_to_bin():
+    assert _stage_suffix("", "") == ".bin"
+    assert _stage_suffix("noext", "application/unknown-type") in (".bin",)
+
+
+def test_mime_suffix_override_covers_all_docling_mimes():
+    """Every MIME in DOCLING_MIME_HINTS should have an override entry."""
+    from workers.gpu_worker.docling_extract import DOCLING_MIME_HINTS
+    for mime in DOCLING_MIME_HINTS:
+        if mime.endswith("/"):  # image/* is a prefix, skip
+            continue
+        assert mime in _MIME_SUFFIX_OVERRIDE, f"Missing override for {mime}"
 
 
 def test_unit_schema_accepts_list_bboxes():

@@ -119,8 +119,8 @@ async def list_units(source_id: str | None = None, limit: int = Query(1000, ge=1
             # Guard: source_id is a UUID column; a non-UUID (e.g. corpus scope)
             # must yield an empty list, never a Postgres 500.
             try:
-                uuid.UUID(source_id)
-            except ValueError:
+                uuid.UUID(str(source_id))
+            except (TypeError, ValueError):
                 return []
             rows = (
                 await conn.execute(

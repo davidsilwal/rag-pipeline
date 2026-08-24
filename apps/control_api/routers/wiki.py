@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
@@ -84,8 +85,8 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                     "page_id": page_id,
                     "file_path": page.get("file_path"),
                     "title": page.get("title"),
-                    "page_type": page.get("page_type"),
-                    "domain": page.get("domain"),
+                    "page_type": page.get("page_type") or "page",
+                    "domain": page.get("domain") or "docs",
                     "status": page.get("status", "active"),
                     "frontmatter": json.dumps(page.get("frontmatter") or {}),
                     "markdown_body": page.get("markdown_body") or "",
@@ -93,13 +94,18 @@ async def upsert_wiki_pages(request: Request, _tok: str = Depends(require_any_to
                 },
             )
             for chunk in chunks:
-                chunk_id = chunk.get("chunk_id") or page_id
+                # chunk_id is a UUID column; when the producer omits one, derive a
+                # deterministic UUID from (page_id, chunk_index) so re-runs are
+                # stable and unique per chunk.
+                chunk_id = chunk.get("chunk_id") or str(
+                    uuid.uuid5(uuid.NAMESPACE_URL, f"{page_id}:{chunk.get('chunk_index') or 0}")
+                )
                 await conn.execute(
                     text("""
                     INSERT INTO wiki_chunks
                         (chunk_id, page_id, file_path, heading_path, chunk_index, content, content_hash, dense_vector, sparse_weights, chunk_metadata)
                     VALUES
-                        (:chunk_id, :page_id, :file_path, :heading_path, :chunk_index, :content, :content_hash, :dense_vector, :sparse_weights, :metadata)
+                        (:chunk_id, :page_id, :file_path, :heading_path, :chunk_index, :content, :content_hash, :dense_vector, :sparse_weights, :chunk_metadata)
                     ON CONFLICT (page_id, chunk_index) DO UPDATE SET
                         content = EXCLUDED.content,
                         content_hash = EXCLUDED.content_hash,

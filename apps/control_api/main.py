@@ -129,6 +129,23 @@ app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
 app.include_router(embed_cache.router, prefix="/api/v1", tags=["embed_cache"])
 app.include_router(system.router, prefix="/api/v1", tags=["system"])
 
+
+# --- OpenAPI patch: global security so Swagger "Authorize" button appears ----
+_original_openapi = app.openapi
+
+
+def _patched_openapi():
+    schema = _original_openapi()
+    comps = schema.setdefault("components", {})
+    comps.setdefault("securitySchemes", {}).setdefault(
+        "HTTPBearer", {"type": "http", "scheme": "bearer"}
+    )
+    schema.setdefault("security", [{"HTTPBearer": []}])
+    return schema
+
+
+app.openapi = _patched_openapi
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

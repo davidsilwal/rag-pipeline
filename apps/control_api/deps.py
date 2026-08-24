@@ -13,23 +13,32 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from config import config
 
+# Swagger scheme — the "Authorize" button uses this.  The raw header
+# parameter is hidden from the OpenAPI spec so users can only auth via
+# the Authorize button (not a broken text input field).
+_bearer_scheme = HTTPBearer(auto_error=False)
 
-def _parse_bearer(authorization: str | None) -> str:
-    if not authorization:
+
+def _parse_bearer(raw: str | None) -> str:
+    """Extract the token from a ``Bearer <token>`` header value or a bare token."""
+    if not raw:
         return ""
-    parts = authorization.split(" ", 1)
+    parts = raw.split(" ", 1)
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1].strip()
-    return authorization.strip()
+    return raw.strip()
 
 
-async def require_admin_token(authorization: str | None = Header(default=None)) -> str:
+async def require_admin_token(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
+) -> str:
     """Require the control-plane API_TOKEN (admin-level)."""
-    token = _parse_bearer(authorization)
+    token = _parse_bearer(creds.credentials if creds else None)
     if not config.api_token or token != config.api_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -38,9 +47,11 @@ async def require_admin_token(authorization: str | None = Header(default=None)) 
     return token
 
 
-async def optional_worker_token(authorization: str | None = Header(default=None)) -> uuid.UUID | None:
+async def optional_worker_token(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
+) -> uuid.UUID | None:
     """Parse a worker token if present; returns None otherwise (caller decides)."""
-    token = _parse_bearer(authorization)
+    token = _parse_bearer(creds.credentials if creds else None)
     if not token:
         return None
     try:
@@ -49,9 +60,11 @@ async def optional_worker_token(authorization: str | None = Header(default=None)
         return None
 
 
-async def require_any_token(authorization: str | None = Header(default=None)) -> str:
+async def require_any_token(
+    creds: HTTPAuthorizationCredentials | None = Security(_bearer_scheme),
+) -> str:
     """Accept either the admin API_TOKEN or a valid worker token."""
-    token = _parse_bearer(authorization)
+    token = _parse_bearer(creds.credentials if creds else None)
     if not token:
         raise HTTPException(status_code=401, detail="Missing token")
     if config.api_token and token == config.api_token:

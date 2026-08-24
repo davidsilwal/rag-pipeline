@@ -208,8 +208,7 @@ CREATE TABLE wiki_chunks (
     content_hash CHAR(64) NOT NULL,
     dense_vector vector(1024),
     sparse_weights JSONB,
-    fts_vector tsvector GENERATED ALWAYS AS
-        (to_tsvector(COALESCE(NULLIF((chunk_metadata->>'lang'),'')::regconfig, 'simple'), content)) STORED,
+    fts_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
     chunk_metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(page_id, chunk_index)

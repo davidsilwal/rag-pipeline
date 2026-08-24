@@ -120,8 +120,9 @@ async def main() -> int:
 
             await asyncio.sleep(1)
             r = await c.get(f"{BASE}/tasks", headers=hdrs(),
-                            params={"stage": "chunk", "status": "queued"})
+                            params={"stage": "chunk"})
             chunk_tasks = [t for t in r.json() if t["scope_id"] == sid]
+            # Accept queued/claimed/running — worker may have claimed it already
             check("producer chaining: extract → chunk enqueued",
                   len(chunk_tasks) == 1, f"chunk tasks: {chunk_tasks}")
 

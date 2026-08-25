@@ -93,3 +93,8 @@ checkpoints/
 # Local config overrides
 /config/local.py
 /local_settings.py
+# Dashboard (wiki-dashboard)
+dashboard/.next/
+dashboard/node_modules/
+dashboard/.env.local
+dashboard/.env*.local

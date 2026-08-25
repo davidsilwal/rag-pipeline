@@ -9,6 +9,7 @@ import { StatusBadge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CopyButton } from "@/components/ui/copy-button";
 import { relativeTime } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 
 type PendingInfo = {
   status: "pending";
@@ -41,20 +42,6 @@ function isUuid(value: string): boolean {
   );
 }
 
-function getApiBase(): string {
-  // Prefer the explicit user-set URL (localStorage), then the build-time
-  // NEXT_PUBLIC_API_URL, then a relative path. The previous relative default
-  // would silently 404 against the dashboard host (e.g. 100.72.153.12:3000)
-  // because no API runs there — only the control-api on :8000 does.
-  if (typeof window !== "undefined") {
-    const ls = window.localStorage.getItem("wiki_api_url");
-    if (ls) return ls.replace(/\/+$/, "");
-  }
-  const env = process.env.NEXT_PUBLIC_API_URL;
-  if (env) return env.replace(/\/+$/, "");
-  return "";
-}
-
 export default function WikiSlugPage({
   params,
 }: {
@@ -62,12 +49,18 @@ export default function WikiSlugPage({
 }) {
   const { slug: slugParts } = use(params);
   const router = useRouter();
+  const { apiUrl, token } = useAuth();
   const slug = (slugParts ?? []).join("/");
   const isUuidSlug = isUuid(slug);
 
   const [page, setPage] = useState<PageState>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resolvedBase, setResolvedBase] = useState<string>(apiUrl);
+
+  useEffect(() => {
+    setResolvedBase(apiUrl);
+  }, [apiUrl]);
 
   useEffect(() => {
     if (!slug) {
@@ -81,14 +74,16 @@ export default function WikiSlugPage({
 
     async function resolve() {
       try {
-        const token = localStorage.getItem("wiki_api_token") ?? "";
-        const headers = { Authorization: `Bearer ${token}` };
-        const apiBase = getApiBase();
-        if (isUuidSlug) {
-          const r = await fetch(
-            `${apiBase}/wiki/pages/${slug}`,
-            { headers },
+        const base = resolvedBase.replace(/\/+$/, "");
+        if (!base) {
+          setError(
+            "API URL not configured. Open Settings (sidebar) and set the API URL.",
           );
+          return;
+        }
+        const headers = { Authorization: `Bearer ${token}` };
+        if (isUuidSlug) {
+          const r = await fetch(`${base}/wiki/pages/${slug}`, { headers });
           if (cancelled) return;
           if (r.ok) {
             const data = await r.json();
@@ -99,7 +94,7 @@ export default function WikiSlugPage({
           }
         } else {
           const r = await fetch(
-            `${apiBase}/wiki/by-file/${encodeURI(slug)}`,
+            `${base}/wiki/by-file/${encodeURI(slug)}`,
             { headers },
           );
           if (cancelled) return;
@@ -140,7 +135,7 @@ export default function WikiSlugPage({
     return () => {
       cancelled = true;
     };
-  }, [slug, isUuidSlug, router]);
+  }, [slug, isUuidSlug, router, resolvedBase, token]);
 
   const headings = useMemo(() => {
     if (!page || page.status !== "ok" || !page.markdown_body) return [];
@@ -154,6 +149,7 @@ export default function WikiSlugPage({
 
   const data = page?.status === "ok" ? page : null;
   const pending = page?.status === "pending" ? page : null;
+  const apiMissing = !resolvedBase;
 
   return (
     <AppShell>
@@ -166,7 +162,21 @@ export default function WikiSlugPage({
           Back to Wiki
         </Link>
 
-        {loading ? (
+        {apiMissing ? (
+          <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-6">
+            <h2 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
+              API URL not configured
+            </h2>
+            <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
+              The dashboard doesn't know where the control-api is. Open
+              <Link href="/system" className="underline mx-1">
+                Settings
+              </Link>
+              (or log in again from the home page) and set the API URL,
+              typically <code className="text-xs">http://100.72.153.12:8000/api/v1</code>.
+            </p>
+          </div>
+        ) : loading ? (
           <div className="animate-pulse space-y-4">
             <div className="h-8 bg-zinc-100 dark:bg-zinc-800 rounded w-1/3" />
             <div className="h-32 bg-zinc-100 dark:bg-zinc-800 rounded" />

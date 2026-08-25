@@ -128,12 +128,11 @@ class ApiClient {
     return this.request<WikiPage>("GET", `/wiki/pages/${id}`);
   }
 
-  listWikiChunks(params?: { page_id?: string; limit?: number }) {
-    const qs = new URLSearchParams();
-    if (params?.page_id) qs.set("page_id", params.page_id);
-    if (params?.limit) qs.set("limit", String(params.limit));
-    const q = qs.toString();
-    return this.request<WikiChunk[]>("GET", `/wiki/chunks${q ? `?${q}` : ""}`);
+  getWikiPageByFile(filePath: string) {
+    return this.request<WikiPage>(
+      "GET",
+      `/wiki/by-file/${encodeURIComponent(filePath)}`,
+    );
   }
 
   // ── Search ───────────────────────────────────────────────────────────────

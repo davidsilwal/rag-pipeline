@@ -164,6 +164,65 @@ async def get_wiki_page(page_id: str, _tok: str = Depends(require_any_token)):
     }
 
 
+@router.get("/by-file/{file_path:path}")
+async def get_wiki_page_by_file(file_path: str, _tok: str = Depends(require_any_token)):
+    """Resolve a wiki page by its source file_path. Returns the page if it
+    has been compiled; 404 with a hint if it hasn't been generated yet."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        result = await conn.execute(
+            text(
+                """
+                SELECT page_id, file_path, title, page_type, domain, status,
+                       frontmatter, markdown_body, source_unit_ids,
+                       last_verified_at, created_at, updated_at
+                FROM wiki_pages
+                WHERE file_path = :fp
+                """
+            ),
+            {"fp": file_path},
+        )
+        row = result.mappings().first()
+        if row:
+            return {
+                "page_id": str(row["page_id"]),
+                "file_path": row["file_path"],
+                "title": row["title"],
+                "page_type": row["page_type"],
+                "domain": row["domain"],
+                "status": row["status"],
+                "frontmatter": row["frontmatter"],
+                "markdown_body": row["markdown_body"],
+                "source_unit_ids": row["source_unit_ids"],
+                "last_verified_at": row["last_verified_at"].isoformat() if row["last_verified_at"] else None,
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+            }
+        # Page not compiled yet — check the source so we can tell the dashboard
+        # whether the compile is queued or simply never going to happen.
+        src = (await conn.execute(
+            text("SELECT source_id, status FROM sources WHERE file_path = :fp"),
+            {"fp": file_path},
+        )).mappings().first()
+    if src is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No source found at {file_path}",
+        )
+    # Source exists, page is not yet compiled. Return a structured 404 so the
+    # dashboard can render a helpful "compile pending" state instead of a
+    # blank "Page not found" message.
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "message": f"Wiki page for {file_path} has not been compiled yet",
+            "source_id": str(src["source_id"]),
+            "source_status": src["status"],
+        },
+    )
+
+
+
 @router.get("/chunks")
 async def list_wiki_chunks(limit: int = 50, page_id: str | None = None, _tok: str = Depends(require_any_token)):
     engine = get_engine()

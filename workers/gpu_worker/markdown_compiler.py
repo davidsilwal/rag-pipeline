@@ -25,7 +25,10 @@ try:
 except ImportError:
     httpx = None
 
-from .db import get_pool
+try:
+    from .db import get_pool
+except Exception:
+    get_pool = None
 
 
 @dataclass(frozen=True)
@@ -235,19 +238,98 @@ Return the JSON now."""
 
 def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> str:
     raw = (raw or "").strip()
+    if not raw:
+        return raw
 
-    start = raw.find("{")
-    if start != -1:
+    # Strategy 1: fenced ```json ... ``` (most reliable for our prompt)
+    fence_idx = raw.find("```json")
+    if fence_idx != -1:
+        start = fence_idx + len("```json")
+        # skip optional language tag on the same line
+        nl = raw.find("\n", start)
+        if nl != -1:
+            start = nl + 1
+        end = raw.find("```", start)
+        if end != -1:
+            inner = raw[start:end].strip()
+            # find balanced outer { ... } in inner
+            obj_text = _extract_outer_json(inner)
+            if obj_text:
+                try:
+                    obj = json.loads(obj_text)
+                    if isinstance(obj, dict) and isinstance(obj.get("body"), str):
+                        return obj["body"]
+                except Exception:
+                    pass
+
+    # Strategy 2: balanced { ... } scanned from the END (handles preamble text)
+    obj_text = _extract_outer_json(raw, from_end=True)
+    if obj_text:
+        try:
+            obj = json.loads(obj_text)
+            if isinstance(obj, dict) and isinstance(obj.get("body"), str):
+                return obj["body"]
+        except Exception:
+            pass
+
+    # Strategy 3: fenced ```markdown ... ```
+    fence_idx = raw.find("```markdown")
+    if fence_idx != -1:
+        start = fence_idx + len("```markdown")
+        end = raw.find("```", start)
+        if end != -1:
+            return raw[start:end].strip()
+
+    # Strategy 4: strip ```json / ``` wrappers if any
+    if raw.startswith("```") and raw.endswith("```"):
+        s = raw.find("\n")
+        if s != -1:
+            e = raw.rfind("```")
+            if e > s:
+                return raw[s + 1 : e].strip()
+
+    return raw
+
+
+def _extract_outer_json(text: str, from_end: bool = False) -> str | None:
+    """Find the first balanced top-level { ... } in text.
+    If from_end=True, scan from the right so the LAST balanced object wins
+    (helps when the model prepends a preamble that contains an example JSON).
+    """
+    if from_end:
+        # find last '}' and walk backwards to matching '{'
+        end = text.rfind("}")
+        if end == -1:
+            return None
         depth = 0
-        end = -1
         in_str = False
         esc = False
-        for i in range(start, len(raw)):
-            c = raw[i]
+        start = -1
+        for i in range(end, -1, -1):
+            c = text[i]
+            # reverse string tracking is messy; instead walk forward from each candidate '{'
+            pass
+        # simpler: walk all '{' positions from right to left, try each
+        for i in range(end, -1, -1):
+            if text[i] == "{":
+                cand = text[i : end + 1]
+                if _is_balanced_json(cand):
+                    return cand
+        return None
+    else:
+        start = text.find("{")
+        if start == -1:
+            return None
+        # find matching '}'
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(text)):
+            c = text[i]
             if in_str:
                 if esc:
                     esc = False
-                elif c == "\\\\":
+                elif c == "\\":
                     esc = True
                 elif c == '"':
                     in_str = False
@@ -259,24 +341,16 @@ def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> s
             elif c == "}":
                 depth -= 1
                 if depth == 0:
-                    end = i + 1
-                    break
-        if end != -1:
-            candidate = raw[start:end]
-            try:
-                obj = json.loads(candidate)
-                if isinstance(obj, dict) and isinstance(obj.get("body"), str):
-                    return obj["body"]
-            except Exception:
-                pass
+                    return text[start : i + 1]
+        return None
 
-    fence = raw.find("```markdown")
-    if fence != -1:
-        e = raw.find("```", fence + len("```markdown"))
-        if e != -1:
-            return raw[fence + len("```markdown") : e].strip()
 
-    return raw
+def _is_balanced_json(candidate: str) -> bool:
+    try:
+        json.loads(candidate)
+        return True
+    except Exception:
+        return False
 
 
 async def compile_page(topic_path: str, units: Sequence[dict], frontmatter: dict) -> PageResult:

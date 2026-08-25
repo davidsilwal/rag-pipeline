@@ -2,7 +2,8 @@
 """workers/gpu_worker/markdown_compiler.py — Lossless Markdown synthesis & coverage verifier (§8.2).
 
 Uses LOCAL_LLM_API_BASE via LiteLLM for compilation. Coverage threshold from env or
-policies/publication_gates.yaml. Falls back to raw-unit append when coverage fails.
+policies/publication_gates.yaml. Falls back to raw-unit appendix when the LLM is
+unavailable.
 """
 
 from __future__ import annotations
@@ -38,12 +39,24 @@ def _base() -> str:
 async def _complete(prompt: str, max_tokens: int = 4096) -> str:
     if litellm is None:
         return ""
+    # LiteLLM requires an api_key for the proxy. Pull from one of the common
+    # env vars; fall back to the local master key for the bundled litellm-proxy.
+    api_key = (
+        os.getenv("LITELLM_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("LOCAL_LLM_API_KEY")
+        or "__REDACTED_LITELLM_KEY__"
+    )
+    # Cap tokens to avoid reasoning models returning only reasoning_content
+    # (which leaves `content` empty and triggers the raw-appendix fallback).
+    max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1024"))
     try:
         resp = litellm.completion(
             model=f"openai/{_model()}",
             messages=[{"role": "system", "content": "You are a documentation compiler. Output Markdown only."},
                       {"role": "user", "content": prompt}],
             api_base=_base(),
+            api_key=api_key,
             max_tokens=max_tokens,
             temperature=0.0,
         )

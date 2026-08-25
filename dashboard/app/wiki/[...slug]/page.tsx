@@ -9,7 +9,6 @@ import { StatusBadge } from "@/components/ui/badge";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CopyButton } from "@/components/ui/copy-button";
 import { relativeTime } from "@/lib/utils";
-import { useAuth } from "@/lib/auth";
 
 type PendingInfo = {
   status: "pending";
@@ -42,6 +41,27 @@ function isUuid(value: string): boolean {
   );
 }
 
+const LS_TOKEN = "wiki_api_token";
+const LS_API_URL = "wiki_api_url";
+
+function readApiBase(): string {
+  if (typeof window === "undefined") return "";
+  // Always read the latest value at call-time. useAuth() (zustand) hydrates
+  // the store at module import time, but if the user updates the URL via
+  // Settings the page may not re-render in time. Reading directly each
+  // fetch ensures we always use the current setting.
+  const fromLs = window.localStorage.getItem(LS_API_URL);
+  if (fromLs && fromLs.trim()) return fromLs.replace(/\/+$/, "");
+  const env = process.env.NEXT_PUBLIC_API_URL;
+  if (env) return env.replace(/\/+$/, "");
+  return "";
+}
+
+function readToken(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(LS_TOKEN) ?? "";
+}
+
 export default function WikiSlugPage({
   params,
 }: {
@@ -49,18 +69,17 @@ export default function WikiSlugPage({
 }) {
   const { slug: slugParts } = use(params);
   const router = useRouter();
-  const { apiUrl, token } = useAuth();
   const slug = (slugParts ?? []).join("/");
   const isUuidSlug = isUuid(slug);
 
   const [page, setPage] = useState<PageState>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [resolvedBase, setResolvedBase] = useState<string>(apiUrl);
+  const [apiBase, setApiBase] = useState<string>("");
 
   useEffect(() => {
-    setResolvedBase(apiUrl);
-  }, [apiUrl]);
+    setApiBase(readApiBase());
+  }, []);
 
   useEffect(() => {
     if (!slug) {
@@ -74,14 +93,16 @@ export default function WikiSlugPage({
 
     async function resolve() {
       try {
-        const base = resolvedBase.replace(/\/+$/, "");
+        // Re-read apiBase at fetch time so user updates to Settings take
+        // effect on the next attempt.
+        const base = (apiBase || readApiBase()).replace(/\/+$/, "");
         if (!base) {
           setError(
             "API URL not configured. Open Settings (sidebar) and set the API URL.",
           );
           return;
         }
-        const headers = { Authorization: `Bearer ${token}` };
+        const headers = { Authorization: `Bearer ${readToken()}` };
         if (isUuidSlug) {
           const r = await fetch(`${base}/wiki/pages/${slug}`, { headers });
           if (cancelled) return;
@@ -135,7 +156,7 @@ export default function WikiSlugPage({
     return () => {
       cancelled = true;
     };
-  }, [slug, isUuidSlug, router, resolvedBase, token]);
+  }, [slug, isUuidSlug, router, apiBase]);
 
   const headings = useMemo(() => {
     if (!page || page.status !== "ok" || !page.markdown_body) return [];
@@ -149,7 +170,7 @@ export default function WikiSlugPage({
 
   const data = page?.status === "ok" ? page : null;
   const pending = page?.status === "pending" ? page : null;
-  const apiMissing = !resolvedBase;
+  const apiMissing = !apiBase;
 
   return (
     <AppShell>

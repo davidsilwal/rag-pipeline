@@ -301,7 +301,10 @@ async def get_blob(source_id: uuid.UUID):
 @router.post("/{source_id}/text", summary="Store extracted plain text")
 async def put_source_text(source_id: uuid.UUID, request: Request, _tok: str = Depends(require_any_token)):
     body = await request.body()
-    text_content = body.decode("utf-8", errors="replace")
+    # Strip embedded NULs which Postgres UTF8 rejects (\x00) but Docling can
+    # emit when parsing binary-flavored files. Decode with `replace` so we
+    # never error on the client.
+    text_content = body.decode("utf-8", errors="replace").replace("\x00", "")
     import hashlib
     content_hash = hashlib.sha256(text_content.encode("utf-8")).hexdigest()
     engine = get_engine()
@@ -324,7 +327,6 @@ async def put_source_text(source_id: uuid.UUID, request: Request, _tok: str = De
             {"id": source_id, "hash": content_hash, "text": text_content, "len": len(text_content)},
         )
     return {"status": "stored", "chars": len(text_content)}
-
 
 @router.get("/{source_id}/text", summary="Fetch extracted plain text")
 async def get_source_text(source_id: uuid.UUID):

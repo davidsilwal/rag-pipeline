@@ -443,22 +443,49 @@ async def handle_graphrag(api: ApiClient, cfg: dict, task: dict) -> dict:
 async def handle_compile(api: ApiClient, cfg: dict, task: dict) -> dict:
     from workers.gpu_worker.markdown_compiler import compile_page
     scope_id = task.get("scope_id", "page")
+    # Determine the original source file_path so wiki_pages.file_path mirrors
+    # sources.file_path (the key the dashboard uses to look up pages). When
+    # running on a per-source scope, fetch the source row; for the synthetic
+    # `corpus` scope, fall back to a markdown filename derived from the scope.
+    source_fp: str | None = None
+    if task.get("scope_type") == "source":
+        try:
+            src = await api.get(f"/sources/by-id/{scope_id}")
+            if src:
+                source_fp = src.get("file_path")
+        except Exception:
+            source_fp = None
+    if source_fp:
+        file_path = source_fp
+    elif task.get("scope_type") == "corpus":
+        file_path = "corpus.md"
+    else:
+        file_path = f"{scope_id}.md"
     units = await _fetch_units(api, scope_id)
     page = await compile_page(scope_id, units, {})
+    # Derive title from the original file_path (e.g. projects/ai/x.md → x)
+    if source_fp:
+        title = source_fp.split("/")[-1].removesuffix(".md") or scope_id
+    else:
+        title = file_path.split("/")[-1].removesuffix(".md") or scope_id
+    page_id = str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_URL, source_fp or scope_id))
     page_payload = {
-        "page_id": str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_URL, scope_id)),
-        "file_path": page.page_path,
-        "title": page.page_path.split("/")[-1].removesuffix(".md") if page.page_path else scope_id,
+        "page_id": page_id,
+        "file_path": file_path,
+        "title": title,
         "page_type": "source",
         "domain": "docs",
         "status": "active",
-        "frontmatter": {},
+        "frontmatter": {
+            "source_id": scope_id,
+            "source_path": source_fp,
+        } if source_fp else {},
         "markdown_body": page.markdown,
         "source_unit_ids": [u.get("unit_id") for u in units if u.get("unit_id")],
         "chunks": [
             {
-                "page_id": str(__import__("uuid").uuid5(__import__("uuid").NAMESPACE_URL, scope_id)),
-                "file_path": page.page_path,
+                "page_id": page_id,
+                "file_path": file_path,
                 "chunk_index": idx,
                 "content": u.get("clean_text") or "",
                 "heading_path": u.get("heading_path") or [],
@@ -472,7 +499,7 @@ async def handle_compile(api: ApiClient, cfg: dict, task: dict) -> dict:
         await api.post("/wiki/pages", {"pages": [page_payload]})
     except Exception as e:
         log.warning("wiki write failed: %s", e)
-    return {"page_path": page.page_path, "coverage": page.coverage_score,
+    return {"page_path": file_path, "coverage": page.coverage_score,
             "citations": page.citations}
 
 
@@ -588,9 +615,14 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
     concurrency = int(cfg.get("max_concurrent", 1) or 1)
     log.info("worker started id=%s stages=%s concurrency=%s", worker_id, cfg.get("stages"), concurrency)
     while True:
-        claimed = await api.post("/tasks/claim", {"worker_id": worker_id, "stages": cfg.get("stages"), "concurrency": concurrency})
-        tasks = claimed.get("tasks", []) if isinstance(claimed, dict) else []
-        if not tasks:
+        claimed = await api.post("/tasks/claim", {"worker_id": worker_id, "stages": cfg.get("stages"), "max_tasks": concurrency})
+        # API returns a bare list (or empty list) — be tolerant of both shapes
+        if isinstance(claimed, dict):
+            tasks = claimed.get("tasks") or claimed.get("data") or []
+        elif isinstance(claimed, list):
+            tasks = claimed
+        else:
+            tasks = []
             try:
                 await api.post(f"/workers/{worker_id}/heartbeat", {"load": {}})
             except Exception:

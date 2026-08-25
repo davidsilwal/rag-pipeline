@@ -116,81 +116,73 @@ async def claim(
 
 
 async def _claim_once(conn, worker_id: uuid.UUID, stages: list[str], max_tasks: int) -> list[dict]:
-    """One SKIP LOCKED claim pass across the requested stages."""
+    """One SKIP LOCKED claim pass across the requested stages.
+
+    Strategy: do a single cross-stage SELECT that returns the next eligible
+    tasks in (priority, created_at) order, then UPDATE each row individually
+    with a per-stage TTL. This avoids the original per-stage loop's bug where
+    the first stage in the list drained the queue and left later stages idle.
+    """
+    if not stages:
+        return []
+    STAGE_TTL_SECS = {
+        "discover": 900, "extract": 900, "chunk": 900,
+        "embed": 600, "dedup": 600,
+        "cluster": 3600, "consensus": 1200, "graphrag": 1200, "compile": 1200,
+    }
+    # Pick candidates globally (lowest priority, oldest created_at) across the
+    # worker's enabled stages. No unnest — just a Python-rendered IN list.
+    placeholders = ",".join(f":s{i}" for i in range(len(stages)))
+    select_sql = text(f"""
+        SELECT task_id, stage FROM task_queue
+        WHERE stage IN ({placeholders})
+          AND next_run_at <= now()
+          AND (status = 'queued'
+               OR (status = 'claimed' AND lease_expires_at IS NOT NULL
+                   AND lease_expires_at < now()))
+        ORDER BY priority, created_at
+        LIMIT :lim
+        FOR UPDATE SKIP LOCKED
+    """)
+    params: dict = {"lim": max_tasks}
+    for i, s in enumerate(stages):
+        params[f"s{i}"] = s
+    cand = (await conn.execute(select_sql, params)).mappings().all()
     out: list[dict] = []
-    for stage in stages:
-        if len(out) >= max_tasks:
-            break
-        ttl = STAGE_TTLS.get(stage, DEFAULT_TTL)
-        sql = text("""
-            WITH candidate AS (
-                SELECT task_id FROM task_queue
-                WHERE stage = :stage
-                  AND next_run_at <= now()
-                  AND (
-                      status = 'queued'
-                      -- Lazy reclaim: a claimed task whose lease expired (crashed
-                      -- / offline worker) is picked up by the next claim (§4.4).
-                      OR (status = 'claimed' AND lease_expires_at IS NOT NULL
-                          AND lease_expires_at < now())
-                  )
-                ORDER BY priority, created_at
-                LIMIT :lim
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE task_queue t
-               SET status = 'claimed',
-                   leased_by = :wid,
-                   lease_token = gen_random_uuid(),
-                   lease_expires_at = now() + make_interval(secs => :ttl),
-                   attempts = attempts + 1,
-                   started_at = now(),
-                   updated_at = now()
-              FROM candidate c
-             WHERE t.task_id = c.task_id
-            RETURNING t.task_id, t.stage, t.scope_type, t.scope_id,
-                      t.payload, t.lease_token, t.lease_expires_at, t.attempts
-        """)
-        rows = (
-            await conn.execute(sql, {"stage": stage, "wid": worker_id, "lim": max_tasks - len(out), "ttl": ttl})
-        ).mappings().all()
-        for r in rows:
-            out.append({
-                "task_id": str(r["task_id"]),
-                "stage": r["stage"],
-                "scope_type": r["scope_type"],
-                "scope_id": r["scope_id"],
-                "payload": r["payload"] or {},
-                "lease_token": str(r["lease_token"]),
-                "lease_expires_at": r["lease_expires_at"].isoformat() if r["lease_expires_at"] else None,
-                "attempts": r["attempts"],
-            })
-    return out
-
-
-@router.post("/{task_id}/heartbeat", summary="Extend a task lease")
-async def task_heartbeat(task_id: uuid.UUID, payload: HeartbeatRequest, _tok: str = Depends(require_any_token)):
-    engine = get_engine()
-    async with engine.begin() as conn:
-        ttl = DEFAULT_TTL
-        row = (
-            await conn.execute(
-                select(text("stage")).select_from(text("task_queue")).where(text("task_id = :id")).params(id=task_id)
-            )
-        ).first()
-        if row:
-            ttl = STAGE_TTLS.get(row[0], DEFAULT_TTL)
-        result = await conn.execute(
+    for c in cand:
+        ttl = STAGE_TTL_SECS.get(c["stage"], 600)
+        upd = await conn.execute(
             text("""
                 UPDATE task_queue
-                   SET lease_expires_at = now() + make_interval(secs => :ttl), updated_at = now()
-                 WHERE task_id = :id AND lease_token = :tok AND status = 'claimed'
+                   SET status = 'claimed',
+                       leased_by = :wid,
+                       lease_token = gen_random_uuid(),
+                       lease_expires_at = now() + make_interval(secs => :ttl),
+                       attempts = attempts + 1,
+                       started_at = now(),
+                       updated_at = now()
+                 WHERE task_id = :id AND status IN ('queued','claimed')
+                RETURNING task_id, stage, scope_type, scope_id, payload,
+                          lease_token, lease_expires_at, attempts
             """),
-            {"id": task_id, "tok": payload.lease_token, "ttl": ttl},
+            {"wid": worker_id, "ttl": ttl, "id": c["task_id"]},
         )
-        if result.rowcount == 0:
-            raise HTTPException(status_code=409, detail="Stale or unknown lease")
-    return {"status": "extended", "lease_expires_at": (datetime.utcnow() + timedelta(seconds=ttl)).isoformat()}
+        r = upd.mappings().first()
+        if not r:
+            continue
+        out.append({
+            "task_id": str(r["task_id"]),
+            "stage": r["stage"],
+            "scope_type": r["scope_type"],
+            "scope_id": r["scope_id"],
+            "payload": r["payload"] or {},
+            "lease_token": str(r["lease_token"]),
+            "lease_expires_at": r["lease_expires_at"].isoformat() if r["lease_expires_at"] else None,
+            "attempts": r["attempts"],
+        })
+        if len(out) >= max_tasks:
+            break
+    return out
 
 
 @router.post("/{task_id}/complete", summary="Mark a task succeeded (token-guarded)")
@@ -224,6 +216,39 @@ async def complete(
         # Reflect source-level progress on the row itself (observability).
         if scope_type == "source":
             await _touch_source_status(conn, scope_id, stage)
+        # pipeline_jobs checkpoint (best-effort, swallow errors so the
+        # task complete itself still returns 200).
+        try:
+            job_type = f"stage.{stage}"
+            n = 1
+            meta = payload.result_meta or {}
+            for key in ("units", "chunks", "pages", "embeddings", "entities", "pairs", "clusters"):
+                if key in meta:
+                    try:
+                        n = int(meta[key])
+                    except Exception:
+                        pass
+                    break
+            await conn.execute(
+                text("""
+                    INSERT INTO pipeline_jobs
+                        (job_type, status, items_processed, fingerprint, stage, task_id,
+                         log_summary, started_at, completed_at)
+                    VALUES
+                        (:job_type, 'completed', :n, :fp, :stage, :tid,
+                         CAST(:summary AS jsonb), now(), now())
+                """),
+                {
+                    "job_type": job_type,
+                    "n": n,
+                    "fp": f"{stage}:{scope_id}",
+                    "stage": stage,
+                    "tid": task_id,
+                    "summary": _json_dumps(meta),
+                },
+            )
+        except Exception as e:
+            log.warning("pipeline_jobs checkpoint failed: %s", e)
     return {"status": "succeeded"}
 
 

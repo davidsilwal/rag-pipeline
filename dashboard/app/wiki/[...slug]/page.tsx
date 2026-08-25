@@ -1,39 +1,29 @@
-"use client";
-
-import { use, useEffect, useMemo, useState } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowLeft, Clock, FileText, Loader2 } from "lucide-react";
+import { unstable_noStore as noStore } from "next/cache";
+import { ArrowLeft, FileText } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
-import { StatusBadge } from "@/components/ui/badge";
-import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { CopyButton } from "@/components/ui/copy-button";
-import { relativeTime } from "@/lib/utils";
+import { WikiPageContent } from "./wiki-page-content";
 
-type PendingInfo = {
-  status: "pending";
-  sourceId: string;
-  sourceStatus: string;
-  message: string;
-};
-
-type ResolvedPage = {
-  status: "ok";
+interface WikiApiPage {
   page_id: string;
   file_path: string;
   title: string;
   page_type: string;
-  domain: string;
-  status_label: string;
-  frontmatter: Record<string, unknown>;
+  domain?: string | null;
+  status: string;
+  frontmatter?: Record<string, unknown>;
   markdown_body: string;
-  source_unit_ids: string[];
-  last_verified_at: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-};
+  source_unit_ids?: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
 
-type PageState = ResolvedPage | PendingInfo | null;
+interface WikiDetail {
+  source_id?: string;
+  source_status?: string;
+  message?: string;
+}
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
@@ -41,136 +31,59 @@ function isUuid(value: string): boolean {
   );
 }
 
-const LS_TOKEN = "wiki_api_token";
-const LS_API_URL = "wiki_api_url";
-
-function readApiBase(): string {
-  if (typeof window === "undefined") return "";
-  // Always read the latest value at call-time. useAuth() (zustand) hydrates
-  // the store at module import time, but if the user updates the URL via
-  // Settings the page may not re-render in time. Reading directly each
-  // fetch ensures we always use the current setting.
-  const fromLs = window.localStorage.getItem(LS_API_URL);
-  if (fromLs && fromLs.trim()) return fromLs.replace(/\/+$/, "");
+async function fetchWikiPage(
+  slug: string,
+  isUuidSlug: boolean,
+): Promise<{ ok: true; page: WikiApiPage } | { ok: false; detail: WikiDetail | null }> {
+  // Resolve API base from the build-time env var. The dashboard runs on a
+  // different host than the control-api (e.g. :3000 vs :8000), so we
+  // always go through the absolute URL configured at build time. The
+  // previous client-side implementation depended on localStorage which
+  // the user's browser may have cleared or cached.
   const env = process.env.NEXT_PUBLIC_API_URL;
-  if (env) return env.replace(/\/+$/, "");
-  return "";
+  if (!env) {
+    return { ok: false, detail: null };
+  }
+  const base = env.replace(/\/+$/, "");
+  const url = isUuidSlug
+    ? `${base}/wiki/pages/${encodeURIComponent(slug)}`
+    : `${base}/wiki/by-file/${encodeURIComponent(slug)}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as WikiApiPage;
+      return { ok: true, page: data };
+    }
+    if (res.status === 404) {
+      const body = (await res.json().catch(() => ({}))) as {
+        detail?: WikiDetail;
+      };
+      return { ok: false, detail: body.detail ?? null };
+    }
+    return { ok: false, detail: null };
+  } catch {
+    return { ok: false, detail: null };
+  }
 }
 
-function readToken(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(LS_TOKEN) ?? "";
-}
-
-export default function WikiSlugPage({
+export default async function WikiSlugPage({
   params,
 }: {
   params: Promise<{ slug: string[] }>;
 }) {
-  const { slug: slugParts } = use(params);
-  const router = useRouter();
+  // Server component: this runs on the server, so the API base URL
+  // configured at build time is always available. The user's localStorage
+  // is irrelevant here, fixing the "Page not found on every wiki page"
+  // regression introduced by the client-side hook approach.
+  noStore();
+
+  const { slug: slugParts } = await params;
   const slug = (slugParts ?? []).join("/");
   const isUuidSlug = isUuid(slug);
 
-  const [page, setPage] = useState<PageState>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [apiBase, setApiBase] = useState<string>("");
+  const result = await fetchWikiPage(slug, isUuidSlug);
 
-  useEffect(() => {
-    setApiBase(readApiBase());
-  }, []);
-
-  useEffect(() => {
-    if (!slug) {
-      setLoading(false);
-      setError("Missing page identifier");
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    async function resolve() {
-      try {
-        // Re-read apiBase at fetch time so user updates to Settings take
-        // effect on the next attempt.
-        const base = (apiBase || readApiBase()).replace(/\/+$/, "");
-        if (!base) {
-          setError(
-            "API URL not configured. Open Settings (sidebar) and set the API URL.",
-          );
-          return;
-        }
-        const headers = { Authorization: `Bearer ${readToken()}` };
-        if (isUuidSlug) {
-          const r = await fetch(`${base}/wiki/pages/${slug}`, { headers });
-          if (cancelled) return;
-          if (r.ok) {
-            const data = await r.json();
-            setPage({ status: "ok", ...data, status_label: data.status });
-          } else {
-            setError("Page not found");
-            setPage(null);
-          }
-        } else {
-          const r = await fetch(
-            `${base}/wiki/by-file/${encodeURI(slug)}`,
-            { headers },
-          );
-          if (cancelled) return;
-          if (r.ok) {
-            const data = await r.json();
-            setPage({ status: "ok", ...data, status_label: data.status });
-            router.replace(`/wiki/${data.page_id}`);
-            return;
-          }
-          if (r.status === 404) {
-            const body = await r.json().catch(() => ({}));
-            const detail = (body && (body.detail ?? body)) || {};
-            if (detail && detail.source_id) {
-              setPage({
-                status: "pending",
-                sourceId: detail.source_id,
-                sourceStatus: detail.source_status ?? "extracted",
-                message:
-                  detail.message ??
-                  "Wiki page for this source has not been compiled yet.",
-              });
-            } else {
-              setError("Page not found");
-              setPage(null);
-            }
-          } else {
-            setError("Page not found");
-            setPage(null);
-          }
-        }
-      } catch (err) {
-        if (!cancelled) setError(String(err));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    resolve();
-    return () => {
-      cancelled = true;
-    };
-  }, [slug, isUuidSlug, router, apiBase]);
-
-  const headings = useMemo(() => {
-    if (!page || page.status !== "ok" || !page.markdown_body) return [];
-    const matches = page.markdown_body.match(/^(#{1,4})\s+(.+)$/gm) || [];
-    return matches.map((m) => {
-      const level = m.match(/^(#+)/)?.[1].length || 1;
-      const text = m.replace(/^#+\s+/, "");
-      return { level, text, id: text.toLowerCase().replace(/[^a-z0-9]+/g, "-") };
-    });
-  }, [page]);
-
-  const data = page?.status === "ok" ? page : null;
-  const pending = page?.status === "pending" ? page : null;
-  const apiMissing = !apiBase;
+  const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
 
   return (
     <AppShell>
@@ -183,127 +96,87 @@ export default function WikiSlugPage({
           Back to Wiki
         </Link>
 
-        {apiMissing ? (
+        {!apiBase ? (
           <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-6">
             <h2 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
               API URL not configured
             </h2>
             <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
-              The dashboard doesn't know where the control-api is. Open
-              <Link href="/system" className="underline mx-1">
-                Settings
-              </Link>
-              (or log in again from the home page) and set the API URL,
-              typically <code className="text-xs">http://100.72.153.12:8000/api/v1</code>.
+              The dashboard's <code className="text-xs">NEXT_PUBLIC_API_URL</code>{" "}
+              environment variable is not set. The control-api typically lives
+              on <code className="text-xs">http://100.72.153.12:8000/api/v1</code>.
+            </p>
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Set it in the build environment (or .env.local) and rebuild the
+              dashboard. This page cannot fetch wiki data without it.
             </p>
           </div>
-        ) : loading ? (
-          <div className="animate-pulse space-y-4">
-            <div className="h-8 bg-zinc-100 dark:bg-zinc-800 rounded w-1/3" />
-            <div className="h-32 bg-zinc-100 dark:bg-zinc-800 rounded" />
-          </div>
-        ) : pending ? (
-          <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-6">
-            <div className="flex items-center gap-2 mb-2">
-              <Loader2 className="h-5 w-5 text-amber-600 animate-spin" />
-              <h2 className="font-semibold text-amber-900 dark:text-amber-100">
-                Wiki page not yet generated
-              </h2>
-            </div>
-            <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
-              {pending.message}
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <div className="text-amber-700 dark:text-amber-300">Source ID</div>
-                <code className="text-amber-900 dark:text-amber-100">
-                  {pending.sourceId}
-                </code>
-              </div>
-              <div>
-                <div className="text-amber-700 dark:text-amber-300">Source status</div>
-                <code className="text-amber-900 dark:text-amber-100">
-                  {pending.sourceStatus}
-                </code>
-              </div>
-            </div>
-            <p className="text-xs text-amber-700 dark:text-amber-300 mt-3">
-              The compile task is queued and will produce the page shortly.
-              Refresh this URL in a minute or two.
-            </p>
-          </div>
-        ) : !data ? (
-          <div className="text-zinc-400">{error ?? "Page not found"}</div>
+        ) : !result.ok ? (
+          <PendingOrMissing detail={result.detail} slug={slug} />
         ) : (
-          <div className="flex gap-6">
-            <article className="flex-1 min-w-0 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-6">
-              <header className="mb-4 pb-4 border-b border-zinc-200 dark:border-zinc-800">
-                <div className="flex items-start justify-between gap-3 mb-2">
-                  <h1 className="text-2xl font-bold">{data.title}</h1>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <StatusBadge status={data.status_label} />
-                  </div>
-                </div>
-                <div className="flex items-center flex-wrap gap-2 text-sm text-zinc-500">
-                  <span className="inline-flex items-center gap-1">
-                    <FileText className="h-3 w-3" />
-                    <code className="text-xs">{data.file_path}</code>
-                  </span>
-                  {data.domain && <span>• {data.domain}</span>}
-                  <span>• {data.page_type}</span>
-                </div>
-                {data.frontmatter && Object.keys(data.frontmatter).length > 0 && (
-                  <details className="mt-3">
-                    <summary className="text-xs text-zinc-500 cursor-pointer">
-                      Frontmatter
-                    </summary>
-                    <pre className="mt-2 text-xs bg-zinc-50 dark:bg-zinc-900 rounded p-2 overflow-x-auto">
-                      {JSON.stringify(data.frontmatter, null, 2)}
-                    </pre>
-                  </details>
-                )}
-                <div className="mt-3 flex items-center gap-3 text-xs text-zinc-400">
-                  <CopyButton text={data.page_id} label="Copy page_id" />
-                  {data.created_at && (
-                    <span className="inline-flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      Created {relativeTime(data.created_at)}
-                    </span>
-                  )}
-                  {data.updated_at && (
-                    <span>• Updated {relativeTime(data.updated_at)}</span>
-                  )}
-                </div>
-              </header>
-              <MarkdownRenderer content={data.markdown_body} />
-            </article>
-            {headings.length > 0 && (
-              <aside className="hidden lg:block w-64 shrink-0">
-                <div className="sticky top-4 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4">
-                  <h3 className="text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wide">
-                    On this page
-                  </h3>
-                  <ul className="space-y-1 text-sm">
-                    {headings.map((h) => (
-                      <li
-                        key={h.id}
-                        style={{ paddingLeft: `${(h.level - 1) * 12}px` }}
-                      >
-                        <a
-                          href={`#${h.id}`}
-                          className="text-zinc-600 dark:text-zinc-400 hover:text-indigo-600 dark:hover:text-indigo-400"
-                        >
-                          {h.text}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </aside>
-            )}
-          </div>
+          <Suspense
+            fallback={
+              <div className="animate-pulse space-y-4">
+                <div className="h-8 bg-zinc-100 dark:bg-zinc-800 rounded w-1/3" />
+                <div className="h-32 bg-zinc-100 dark:bg-zinc-800 rounded" />
+              </div>
+            }
+          >
+            <div className="flex gap-6">
+              <WikiPageContent page={result.page} />
+            </div>
+          </Suspense>
         )}
       </div>
     </AppShell>
+  );
+}
+
+function PendingOrMissing({
+  detail,
+  slug,
+}: {
+  detail: WikiDetail | null;
+  slug: string;
+}) {
+  if (detail && detail.source_id) {
+    return (
+      <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-6">
+        <h2 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
+          Wiki page not yet generated
+        </h2>
+        <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
+          {detail.message ??
+            "Wiki page for this source has not been compiled yet."}
+        </p>
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <div className="text-amber-700 dark:text-amber-300">Source ID</div>
+            <code className="text-amber-900 dark:text-amber-100">
+              {detail.source_id}
+            </code>
+          </div>
+          <div>
+            <div className="text-amber-700 dark:text-amber-300">Source status</div>
+            <code className="text-amber-900 dark:text-amber-100">
+              {detail.source_status ?? "extracted"}
+            </code>
+          </div>
+        </div>
+        <p className="text-xs text-amber-700 dark:text-amber-300 mt-3">
+          The compile task is queued and will produce the page shortly.
+          Refresh this URL in a minute or two.
+        </p>
+        <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
+          File: <code className="text-xs">{slug}</code>
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="text-zinc-400">
+      <div className="font-medium mb-1">Page not found</div>
+      <div className="text-xs">No wiki page or source for {slug}</div>
+    </div>
   );
 }

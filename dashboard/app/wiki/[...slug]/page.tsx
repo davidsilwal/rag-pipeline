@@ -41,6 +41,20 @@ function isUuid(value: string): boolean {
   );
 }
 
+function getApiBase(): string {
+  // Prefer the explicit user-set URL (localStorage), then the build-time
+  // NEXT_PUBLIC_API_URL, then a relative path. The previous relative default
+  // would silently 404 against the dashboard host (e.g. 100.72.153.12:3000)
+  // because no API runs there — only the control-api on :8000 does.
+  if (typeof window !== "undefined") {
+    const ls = window.localStorage.getItem("wiki_api_url");
+    if (ls) return ls.replace(/\/+$/, "");
+  }
+  const env = process.env.NEXT_PUBLIC_API_URL;
+  if (env) return env.replace(/\/+$/, "");
+  return "";
+}
+
 export default function WikiSlugPage({
   params,
 }: {
@@ -69,8 +83,12 @@ export default function WikiSlugPage({
       try {
         const token = localStorage.getItem("wiki_api_token") ?? "";
         const headers = { Authorization: `Bearer ${token}` };
+        const apiBase = getApiBase();
         if (isUuidSlug) {
-          const r = await fetch(`/api/v1/wiki/pages/${slug}`, { headers });
+          const r = await fetch(
+            `${apiBase}/wiki/pages/${slug}`,
+            { headers },
+          );
           if (cancelled) return;
           if (r.ok) {
             const data = await r.json();
@@ -81,7 +99,7 @@ export default function WikiSlugPage({
           }
         } else {
           const r = await fetch(
-            `/api/v1/wiki/by-file/${encodeURI(slug)}`,
+            `${apiBase}/wiki/by-file/${encodeURI(slug)}`,
             { headers },
           );
           if (cancelled) return;

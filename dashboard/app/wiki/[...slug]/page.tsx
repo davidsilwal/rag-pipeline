@@ -31,27 +31,13 @@ function isUuid(value: string): boolean {
   );
 }
 
-async function fetchWikiPage(
-  slug: string,
-  isUuidSlug: boolean,
+async function tryFetch(
+  base: string,
+  url: string,
+  token: string,
 ): Promise<{ ok: true; page: WikiApiPage } | { ok: false; detail: WikiDetail | null }> {
-  const env = process.env.NEXT_PUBLIC_API_URL;
-  if (!env) {
-    return { ok: false, detail: null };
-  }
-  const base = env.replace(/\/+$/, "");
-  const url = isUuidSlug
-    ? `${base}/wiki/pages/${encodeURIComponent(slug)}`
-    : `${base}/wiki/by-file/${encodeURIComponent(slug)}`;
-  // The control-api requires a token (require_any_token accepts either
-  // the admin API_TOKEN or a worker UUID). For server-side fetches the
-  // browser's localStorage isn't reachable, so we forward the build-time
-  // DASHBOARD_API_TOKEN. The user can override it via .env.local.
-  const token = process.env.DASHBOARD_API_TOKEN ?? "";
   const headers: Record<string, string> = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   try {
     const res = await fetch(url, { cache: "no-store", headers });
     if (res.ok) {
@@ -70,23 +56,71 @@ async function fetchWikiPage(
   }
 }
 
+async function fetchWikiPage(
+  slug: string,
+  isUuidSlug: boolean,
+  token: string,
+): Promise<{ ok: true; page: WikiApiPage } | { ok: false; detail: WikiDetail | null }> {
+  const env = process.env.NEXT_PUBLIC_API_URL;
+  if (!env) return { ok: false, detail: null };
+  const base = env.replace(/\/+$/, "");
+
+  if (isUuidSlug) {
+    // Try page_id first; on 404 fall through to source_id (the slug might
+    // actually be a source_id — many dashboard actions leak source_ids
+    // into URLs because frontmatter.source_id was the only UUID visible
+    // when the link was generated).
+    const byPage = await tryFetch(
+      base,
+      `${base}/wiki/pages/${encodeURIComponent(slug)}`,
+      token,
+    );
+    if (byPage.ok) return byPage;
+    if (byPage.detail && (byPage.detail as WikiDetail).source_id) {
+      return byPage;
+    }
+    const bySource = await tryFetch(
+      base,
+      `${base}/wiki/by-source-id/${encodeURIComponent(slug)}`,
+      token,
+    );
+    if (bySource.ok) return bySource;
+    if (bySource.detail && (bySource.detail as WikiDetail).source_id) {
+      return bySource;
+    }
+    return {
+      ok: false,
+      detail:
+        byPage.detail && (byPage.detail as WikiDetail).message
+          ? byPage.detail
+          : bySource.detail && (bySource.detail as WikiDetail).message
+            ? bySource.detail
+            : { message: `No wiki page for ${slug}` },
+    };
+  }
+  return tryFetch(
+    base,
+    `${base}/wiki/by-file/${encodeURIComponent(slug)}`,
+    token,
+  );
+}
+
 export default async function WikiSlugPage({
   params,
 }: {
   params: Promise<{ slug: string[] }>;
 }) {
-  // Server component: this runs on the server, so the API base URL
-  // configured at build time is always available. The user's localStorage
-  // is irrelevant here, fixing the "Page not found on every wiki page"
-  // regression that hit fresh browsers and the 401 that followed when
-  // require_any_token received a missing/empty Bearer.
   noStore();
 
   const { slug: slugParts } = await params;
   const slug = (slugParts ?? []).join("/");
   const isUuidSlug = isUuid(slug);
 
-  const result = await fetchWikiPage(slug, isUuidSlug);
+  const result = await fetchWikiPage(
+    slug,
+    isUuidSlug,
+    process.env.DASHBOARD_API_TOKEN ?? "",
+  );
 
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
 

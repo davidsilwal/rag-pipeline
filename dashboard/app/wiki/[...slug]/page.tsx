@@ -35,11 +35,6 @@ async function fetchWikiPage(
   slug: string,
   isUuidSlug: boolean,
 ): Promise<{ ok: true; page: WikiApiPage } | { ok: false; detail: WikiDetail | null }> {
-  // Resolve API base from the build-time env var. The dashboard runs on a
-  // different host than the control-api (e.g. :3000 vs :8000), so we
-  // always go through the absolute URL configured at build time. The
-  // previous client-side implementation depended on localStorage which
-  // the user's browser may have cleared or cached.
   const env = process.env.NEXT_PUBLIC_API_URL;
   if (!env) {
     return { ok: false, detail: null };
@@ -48,8 +43,17 @@ async function fetchWikiPage(
   const url = isUuidSlug
     ? `${base}/wiki/pages/${encodeURIComponent(slug)}`
     : `${base}/wiki/by-file/${encodeURIComponent(slug)}`;
+  // The control-api requires a token (require_any_token accepts either
+  // the admin API_TOKEN or a worker UUID). For server-side fetches the
+  // browser's localStorage isn't reachable, so we forward the build-time
+  // DASHBOARD_API_TOKEN. The user can override it via .env.local.
+  const token = process.env.DASHBOARD_API_TOKEN ?? "";
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   try {
-    const res = await fetch(url, { cache: "no-store" });
+    const res = await fetch(url, { cache: "no-store", headers });
     if (res.ok) {
       const data = (await res.json()) as WikiApiPage;
       return { ok: true, page: data };
@@ -74,7 +78,8 @@ export default async function WikiSlugPage({
   // Server component: this runs on the server, so the API base URL
   // configured at build time is always available. The user's localStorage
   // is irrelevant here, fixing the "Page not found on every wiki page"
-  // regression introduced by the client-side hook approach.
+  // regression that hit fresh browsers and the 401 that followed when
+  // require_any_token received a missing/empty Bearer.
   noStore();
 
   const { slug: slugParts } = await params;

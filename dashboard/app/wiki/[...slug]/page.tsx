@@ -3,7 +3,7 @@ import Link from "next/link";
 import { unstable_noStore as noStore } from "next/cache";
 import { ArrowLeft, FileText } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
-import { WikiPageContent } from "./wiki-page-content";
+import { WikiPageContentServer } from "./wiki-page-content-server";
 
 interface WikiApiPage {
   page_id: string;
@@ -66,10 +66,6 @@ async function fetchWikiPage(
   const base = env.replace(/\/+$/, "");
 
   if (isUuidSlug) {
-    // Try page_id first; on 404 fall through to source_id (the slug might
-    // actually be a source_id — many dashboard actions leak source_ids
-    // into URLs because frontmatter.source_id was the only UUID visible
-    // when the link was generated).
     const byPage = await tryFetch(
       base,
       `${base}/wiki/pages/${encodeURIComponent(slug)}`,
@@ -153,18 +149,9 @@ export default async function WikiSlugPage({
         ) : !result.ok ? (
           <PendingOrMissing detail={result.detail} slug={slug} />
         ) : (
-          <Suspense
-            fallback={
-              <div className="animate-pulse space-y-4">
-                <div className="h-8 bg-zinc-100 dark:bg-zinc-800 rounded w-1/3" />
-                <div className="h-32 bg-zinc-100 dark:bg-zinc-800 rounded" />
-              </div>
-            }
-          >
-            <div className="flex gap-6">
-              <WikiPageContent page={result.page} />
-            </div>
-          </Suspense>
+          <div className="flex gap-6">
+            <WikiPageContentServer page={result.page} />
+          </div>
         )}
       </div>
     </AppShell>

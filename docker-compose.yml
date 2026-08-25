@@ -108,7 +108,7 @@ services:
       # with `LOCAL_LLM_API_BASE=http://<host>:<port>/v1`.
       LOCAL_LLM_API_BASE: http://litellm-proxy:4000/v1
       LITELLM_API_KEY: __REDACTED_LITELLM_KEY__
-      LOCAL_LLM_MAX_TOKENS: "1024"
+      LOCAL_LLM_MAX_TOKENS: "1600"
       LOCAL_LLM_MAX_ATTEMPTS: "8"
       LOCAL_LLM_FALLBACK_ALIASES: "free,free-auto,free-a,free-b,free-c,free-d,free-e,free-f,free-g,free-h,free-i,free-j,free-k"
     volumes:

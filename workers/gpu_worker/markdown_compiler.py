@@ -9,21 +9,21 @@ Uses raw httpx (not litellm) because:
    (keyed as 'openai/<model>'). The local litellm version doesn't know
    about our custom 'free' / 'free-auto' aliases defined on the proxy.
 2. The proxy itself understands the bare 'free' / 'free-auto' aliases.
-3. Direct HTTP avoids the litellm client-side validation error
-   ("LLM Provider NOT provided").
+3. Direct HTTP avoids the litellm client-side validation error.
 """
 
 from __future__ import annotations
 
 import os
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Sequence
 
 try:
-    import httpx  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover
-    httpx = None  # type: ignore[assignment]
+    import httpx
+except ImportError:
+    httpx = None
 
 from .db import get_pool
 
@@ -34,6 +34,10 @@ class PageResult:
     markdown: str
     coverage_score: float
     citations: int
+
+
+UNIT_LIMIT = 50
+UNIT_TEXT_BUDGET = 2000
 
 
 def _base() -> str:
@@ -50,11 +54,6 @@ def _api_key() -> str:
 
 
 def _aliases() -> list[str]:
-    """Return the litellm-proxy model aliases to try in order.
-
-    Aliases are independent rate-limit pools, so trying multiple after a
-    429 multiplies effective throughput.
-    """
     base = os.getenv("LOCAL_LLM_MODEL", "free")
     alts_raw = os.getenv("LOCAL_LLM_FALLBACK_ALIASES", "free-auto")
     seen = [base]
@@ -76,9 +75,11 @@ def _http_complete(prompt: str, max_tokens: int, model_alias: str) -> str:
                          "Content-Type": "application/json"},
                 json={
                     "model": model_alias,
-                    "messages": [{"role": "system",
-                                  "content": "You are a documentation compiler. Output Markdown only."},
-                                 {"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "system",
+                         "content": "You are a documentation compiler. Output Markdown only."},
+                        {"role": "user", "content": prompt}
+                    ],
                     "max_tokens": max_tokens,
                     "temperature": 0.0,
                 },
@@ -96,9 +97,8 @@ def _http_complete(prompt: str, max_tokens: int, model_alias: str) -> str:
 
 
 async def _complete(prompt: str, max_tokens: int = 4096) -> str:
-    """Retry across multiple model aliases and a few attempts each."""
-    max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1024"))
-    max_attempts = int(os.getenv("LOCAL_LLM_MAX_ATTEMPTS", "8"))
+    max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1600"))
+    max_attempts = int(os.getenv("LOCAL_LLM_MAX_ATTEMPTS", "6"))
     aliases = _aliases()
     for attempt in range(1, max_attempts + 1):
         for alias in aliases:
@@ -111,20 +111,199 @@ async def _complete(prompt: str, max_tokens: int = 4096) -> str:
     return ""
 
 
+def _json_escape(s: str) -> str:
+    """Escape a string for safe inclusion in a JSON body string."""
+    return (
+        s.replace("\\", "\\\\")
+         .replace("\"", "\\\"")
+         .replace("\n", "\\n")
+         .replace("\r", "\\r")
+         .replace("\t", "\\t")
+    )
+
+
+def _build_prompt(topic_path: str, units: Sequence[dict], frontmatter: dict) -> str:
+    safe_units = []
+    for idx, u in enumerate(units[:UNIT_LIMIT], 1):
+        text = (u.get("clean_text") or "").strip()
+        if not text:
+            continue
+        safe_units.append((idx, text[:UNIT_TEXT_BUDGET]))
+
+    topic_title = (frontmatter or {}).get("title") or topic_path.split("/")[-1]
+    if topic_title.endswith(".md"):
+        topic_title = topic_title[:-3]
+    topic_title = (topic_title or "Wiki Page").strip().replace("---", " ").replace("\n", " ")
+    if len(topic_title) > 80:
+        topic_title = topic_title[:80].rsplit(" ", 1)[0]
+
+    unit_catalog = "\n".join(
+        f"<unit n=\"{idx}\">\n{text}\n</unit>"
+        for idx, text in safe_units
+    )
+    unit_count = len(safe_units)
+
+    frontmatter_hint = json.dumps(
+        {k: v for k, v in (frontmatter or {}).items() if k != "source_id"},
+        ensure_ascii=False,
+    )
+
+    return f"""You are a documentation compiler. Produce ONE GitHub-Flavored Markdown wiki page.
+
+# Topic
+- file_path: {topic_path}
+- title: {topic_title!r} (use this exact string as the page title — do NOT use any UUID, hash, or id)
+- max_units_to_cite: {unit_count}
+
+# Frontmatter hint (do NOT echo the source_id)
+{frontmatter_hint}
+
+# Units (numbered, in order)
+{unit_catalog}
+
+# Output format — STRICT, no deviation
+
+Return ONE fenced JSON object (no prose, no markdown outside the JSON):
+
+```json
+{{
+  "title": "{topic_title}",
+  "frontmatter": {{
+    "title": "{topic_title}",
+    "description": "<= 1 sentence summary of what this page covers>",
+    "keywords": ["<2-8 short keywords, comma-separated>"]
+  }},
+  "body": "<a full GitHub-Flavored Markdown body, see rules below>"
+}}
+```
+
+# Rules for the `body` field (most important)
+
+1. The body is GitHub-Flavored Markdown.
+2. Cite every claim with `[^src_<N>]` where N is the 1-based unit index above. Do not cite any unit that does not appear above. Do not invent any new IDs.
+3. Footnote definitions go at the END of the body as a single block:
+
+   ```
+   [^src_1]: <the literal first sentence or defining fact from unit 1>
+   [^src_2]: <the literal first sentence or defining fact from unit 2>
+   ...
+   ```
+
+   Each footnote's text must be UNIQUE — do NOT paste the page title or
+   the same sentence into every footnote. Each footnote is a short
+   fact (5-20 words) extracted from THAT specific unit.
+
+4. Use the unit index `[^src_N]` consistently. If a fact comes from
+   unit 3, cite `[^src_3]`, not `[^src_1]`.
+
+5. Preserve table structure: if a unit contains a markdown table
+   (lines beginning with `|`), include the full table verbatim,
+   followed by a brief caption. Do NOT collapse rows or invent columns.
+
+6. Preserve code blocks: if a unit has triple-backtick code, keep it
+   verbatim inside triple-backticks in the body.
+
+7. Use the page title in headings: start with `# {topic_title}` and
+   use `##` for sections, `###` for subsections.
+
+8. Do not start the body with any preamble. The first character of
+   the body must be `#`.
+
+9. JSON-strict: the body string must be valid JSON-escaped. Real
+   newlines in the body must be `\\n`. Real backticks must be
+   escaped as `\\``. Real double quotes must be escaped as `\\"`.
+
+10. The body should be 200-2000 words depending on the number of
+    units. Do not pad with filler; if a unit contains no relevant
+    content, omit the citation.
+
+# Examples of GOOD output (shape, not content)
+
+body example:
+"# {topic_title}\\\\n\\\\nThis page documents <concept>.\\\\n\\\\n## <Section 1>\\\\n\\\\n<prose>. [^src_1]\\\\n\\\\n## <Section 2>\\\\n\\\\n| Col A | Col B |\\\\n|---|\\\\n| a | b |\\\\n\\\\n[^src_2]\\\\n\\\\n---\\\\n\\\\n[^src_1]: <fact from unit 1>\\\\n[^src_2]: <different fact from unit 2>"
+
+# Examples of BAD output (do not produce)
+
+- A title that is a UUID or looks like a hash.
+- The same footnote text repeated for every citation.
+- Frontmatter that contains the source_id field.
+- A preamble like 'Here is the markdown you requested' before the body.
+- Citations like `[^src_1:unit_1]` or other formats — use exactly `[^src_<N>]`.
+
+Return the JSON now."""
+
+
+def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> str:
+    raw = (raw or "").strip()
+
+    start = raw.find("{")
+    if start != -1:
+        depth = 0
+        end = -1
+        in_str = False
+        esc = False
+        for i in range(start, len(raw)):
+            c = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+                continue
+            if c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end != -1:
+            candidate = raw[start:end]
+            try:
+                obj = json.loads(candidate)
+                if isinstance(obj, dict) and isinstance(obj.get("body"), str):
+                    return obj["body"]
+            except Exception:
+                pass
+
+    fence = raw.find("```markdown")
+    if fence != -1:
+        e = raw.find("```", fence + len("```markdown"))
+        if e != -1:
+            return raw[fence + len("```markdown") : e].strip()
+
+    return raw
+
+
 async def compile_page(topic_path: str, units: Sequence[dict], frontmatter: dict) -> PageResult:
     unit_texts = [u.get("clean_text", "") for u in units if u.get("clean_text")]
-    prompt = (
-        f"Compile a Markdown wiki page for topic: {topic_path}. "
-        "Use only the provided source units. Include footnote citations [^src_<source_id>:unit_<unit_id>]. "
-        "Do not invent facts. Output frontmatter YAML + Markdown body.\n\n"
-    )
-    for idx, u in enumerate(unit_texts[:50], 1):
-        prompt += f"[UNIT {idx}] {u[:2000]}\n\n"
+    if not unit_texts:
+        return PageResult(
+            page_path=f"{topic_path}.md",
+            markdown="> No extractable content in source units.\n",
+            coverage_score=0.0,
+            citations=0,
+        )
 
-    md = await _complete(prompt, max_tokens=4096)
-    if not md:
+    prompt = _build_prompt(topic_path, units, frontmatter)
+    raw = await _complete(prompt, max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1600")))
+    if not raw:
         md = "> [!WARNING] Inferred by Pipeline: LLM compilation unavailable; raw appendix follows.\n\n"
-        for idx, u in enumerate(unit_texts[:50], 1):
-            md += f"### Source Unit {idx}\n\n{u}\n\n"
-    coverage = 1.0 if md.strip() else 0.0
-    return PageResult(page_path=f"{topic_path}.md", markdown=md, coverage_score=coverage, citations=md.count("[^"))
+        for idx, u in enumerate(unit_texts[:UNIT_LIMIT], 1):
+            md += f"### Source Unit {idx}\n\n{u[:UNIT_TEXT_BUDGET]}\n\n"
+        return PageResult(
+            page_path=f"{topic_path}.md", markdown=md, coverage_score=0.0, citations=0
+        )
+
+    body = _parse_llm_response(raw, units, frontmatter)
+    coverage = 1.0 if body.strip() else 0.0
+    return PageResult(
+        page_path=f"{topic_path}.md",
+        markdown=body,
+        coverage_score=coverage,
+        citations=body.count("[^src_"),
+    )

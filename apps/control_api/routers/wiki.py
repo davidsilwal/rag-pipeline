@@ -223,6 +223,61 @@ async def get_wiki_page_by_file(file_path: str, _tok: str = Depends(require_any_
 
 
 
+@router.get("/by-source-id/{source_id}")
+async def get_wiki_page_by_source_id(source_id: str, _tok: str = Depends(require_any_token)):
+    """Resolve a wiki page by its source_id. Useful when the dashboard URL
+    shows the source_id (e.g. from a copy-page_id action that incorrectly
+    captured the source_id instead of the page_id)."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        # First, fetch the source to get its file_path
+        src = (await conn.execute(
+            text("SELECT file_path, status FROM sources WHERE source_id = :sid"),
+            {"sid": source_id},
+        )).mappings().first()
+        if src is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No source found with id {source_id}",
+            )
+        # Then, look up the wiki page by file_path
+        result = await conn.execute(
+            text(
+                """
+                SELECT page_id, file_path, title, page_type, domain, status,
+                       frontmatter, markdown_body, source_unit_ids,
+                       last_verified_at, created_at, updated_at
+                FROM wiki_pages
+                WHERE file_path = :fp
+                """
+            ),
+            {"fp": src["file_path"]},
+        )
+        row = result.mappings().first()
+    if row:
+        return {
+            "page_id": str(row["page_id"]),
+            "file_path": row["file_path"],
+            "title": row["title"],
+            "page_type": row["page_type"],
+            "domain": row["domain"],
+            "status": row["status"],
+            "frontmatter": row["frontmatter"],
+            "markdown_body": row["markdown_body"],
+            "source_unit_ids": row["source_unit_ids"],
+            "last_verified_at": row["last_verified_at"].isoformat() if row["last_verified_at"] else None,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+        }
+    # Page not compiled yet
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "message": f"Wiki page for {src.file_path} has not been compiled yet",
+            "source_id": source_id,
+            "source_status": src["status"],
+        },
+    )
 @router.get("/chunks")
 async def list_wiki_chunks(limit: int = 50, page_id: str | None = None, _tok: str = Depends(require_any_token)):
     engine = get_engine()

@@ -1,4 +1,6 @@
-# version: "3.8"
+# rag-pipeline compose — with worker wired to litellm-proxy_default network so
+# the markdown compiler can call the local LLM via Docker DNS.
+# (Compose v2 schema; v1 `version:` key is ignored.)
 
 services:
   postgres:
@@ -67,8 +69,6 @@ services:
       redis:
         condition: service_healthy
 
-  
-
   worker:
     build:
       context: .
@@ -100,6 +100,13 @@ services:
       ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
       LOCAL_SOURCE_DIR: /root/.okf/knowledge
       LOCAL_LLM_MODEL: free
+      # Compose can't create `litellm-proxy_default` (it lives in another
+      # project), so we declare it as external below and attach the worker.
+      # After `docker compose up -d` for this project, run:
+      #   docker network connect litellm-proxy_default rag-pipeline-worker-1
+      # once to allow the worker to resolve `litellm-proxy` by DNS.
+      LOCAL_LLM_API_BASE: http://litellm-proxy:4000/v1
+      LITELLM_API_KEY: __REDACTED_LITELLM_KEY__
     volumes:
       - .:/workspace
       - ./policies:/app/policies
@@ -112,6 +119,16 @@ services:
         condition: service_healthy
       control-api:
         condition: service_started
+    networks:
+      - default
+      - litellm-proxy_default
 
 volumes:
   pg_data:
+
+networks:
+  default:
+    name: rag-pipeline_default
+  litellm-proxy_default:
+    external: true
+    name: litellm-proxy_default

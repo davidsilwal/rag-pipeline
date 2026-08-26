@@ -134,6 +134,12 @@ async def _process_one_inner(client: httpx.AsyncClient, task: dict) -> dict:
     # Skip if already up to date (check by updated_at)
     if page.markdown and len(page.markdown) > 200:
         pass  # we always re-upsert since we may have new format
+    # Quality gate: reject pages with no [^src_] citations or with a UUID-looking title
+    if body.count("[^src_") == 0:
+        return {"scope_id": scope_id, "ok": False, "err": "no citations in body", "file_path": file_path, "body_len": len(body)}
+    if title and len(title) >= 32 and title[8:9] == "-" and title[13:14] == "-" and title[18:19] == "-" and title[23:24] == "-":
+        return {"scope_id": scope_id, "ok": False, "err": "title is a UUID", "file_path": file_path, "body_len": len(body)}
+
     # Upsert
     for attempt in range(3):
         try:

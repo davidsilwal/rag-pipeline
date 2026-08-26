@@ -209,21 +209,86 @@ Return ONE fenced JSON object (no prose, no markdown outside the JSON):
 7. Use the page title in headings: start with `# {topic_title}` and
    use `##` for sections, `###` for subsections.
 
-8. Do not start the body with any preamble. The first character of
-   the body must be `#`.
+8. The body must start with `# {topic_title}` as a level-1 heading.
+   Include a one-sentence description line immediately after the title,
+   then `##` sections. Do NOT repeat the title as inline prose.
 
-9. JSON-strict: the body string must be valid JSON-escaped. Real
-   newlines in the body must be `\\n`. Real backticks must be
-   escaped as `\\``. Real double quotes must be escaped as `\\"`.
+9. ENTERPRISE FORMATTING — apply these rules for readability:
 
-10. The body should be 200-2000 words depending on the number of
+   a. METADATA-AS-TABLE: For structured items (user stories, tickets,
+      API endpoints, config fields), render metadata as markdown tables
+      with labeled rows. Example:
+
+      ```markdown
+      ### US-001 — Title
+
+      | Field | Value |
+      |---|---|
+      | Role | Social-media analyst |
+      | Need | Polarity and confidence |
+      | Value | Gauge public mood |
+
+      **Acceptance Criteria:** ...
+      ```
+
+   b. ALTERNATE FORMAT: Optionally use blockquotes for emphasis:
+
+      ```markdown
+      > **US-001 — Title**  
+      > **Role:** Social-media analyst  
+      > **Need:** Polarity and confidence  
+      > **Value:** Gauge public mood  
+      >  
+      > **Acceptance Criteria:** ...
+      ```
+
+   c. SEPARATE SECTIONS: Do NOT mix role/need/value/criteria/use-case into
+      one paragraph. Each field gets its own line or table row.
+
+   d. NO INLINE METADATA: Omit orphan references like "Links UC-001"
+      from criteria sentences. Put use-case references in their own
+      labeled field or footnote.
+
+   e. REPEAT-KEY PATTERN: For lists of similar items (user stories,
+      checklist items), repeat the same structure for EVERY item so
+      readers can scan vertically. Do NOT vary the format per item.
+
+   f. PROSE RULE: For narrative sections (introductions, explanations),
+      use short paragraphs (2-4 sentences). Do NOT start the body with
+      a filler preamble like "This page documents..." — the `#` heading
+      already conveys the topic.
+
+   g. PDF/PANDOC SAFE: Avoid raw HTML. Prefer tables, lists, and
+      blockquotes. These render cleanly in pandoc, beamer, Confluence,
+      and GitHub.
+
+10. JSON-strict: the body string must be valid JSON-escaped. Real
+    newlines in the body must be `\\n`. Real backticks must be
+    escaped as `\\``. Real double quotes must be escaped as `\\"`.
+
+11. The body should be 200-2000 words depending on the number of
     units. Do not pad with filler; if a unit contains no relevant
     content, omit the citation.
 
 # Examples of GOOD output (shape, not content)
 
-body example:
-"# {topic_title}\\\\n\\\\nThis page documents <concept>.\\\\n\\\\n## <Section 1>\\\\n\\\\n<prose>. [^src_1]\\\\n\\\\n## <Section 2>\\\\n\\\\n| Col A | Col B |\\\\n|---|\\\\n| a | b |\\\\n\\\\n[^src_2]\\\\n\\\\n---\\\\n\\\\n[^src_1]: <fact from unit 1>\\\\n[^src_2]: <different fact from unit 2>"
+Metadated item (table format):
+
+```markdown
+# User Stories\\n\\n### US-001 — Sentiment of a post\\n\\n| Field | Value |\\n|---|---|\\n| Role | Social-media analyst |\\n| Need | Polarity and confidence |\\n| Value | Gauge public mood |\\n\\n**Acceptance Criteria:** POST /sentiment returns label... [^src_3]\\n\\n| Field | Value |\\n|---|---|\\n| Use Case | UC-001 |\\n\\n---\\n\\n### US-002 — Extract topics\\n\\n...
+```
+
+Metadated item (blockquote format):
+
+```markdown
+# User Stories\\n\\n> **US-001 — Sentiment of a post**\\n\\n> **Role:** Social-media analyst\\n\\n> **Need:** Polarity and confidence\\n\\n> **Value:** Gauge public mood\\n\\n> **Acceptance Criteria:** POST /sentiment returns... [^src_3]\\n\\n> **Use Case:** UC-001\\n\\n---\\n\\n> **US-002 — Extract topics**\\n\\n...
+```
+
+Prose section:
+
+```markdown
+# API Overview\\n\\nThe sentiment API classifies Nepali and English posts. [^src_1]\\n\\n## Endpoints\\n\\n### POST /sentiment\\n\\nReturns polarity and confidence scores. [^src_2]
+```
 
 # Examples of BAD output (do not produce)
 
@@ -232,6 +297,8 @@ body example:
 - Frontmatter that contains the source_id field.
 - A preamble like 'Here is the markdown you requested' before the body.
 - Citations like `[^src_1:unit_1]` or other formats — use exactly `[^src_<N>]`.
+- Mixed inline content: "As an analyst I want topics so that I can tag... Criteria: POST /topics returns... Links UC-001."
+- Filler preamble: "This page documents user stories for the sentiment analysis API."
 
 Return the JSON now."""
 

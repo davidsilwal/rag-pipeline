@@ -242,17 +242,23 @@ def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> s
         return raw
 
     # Strategy 1: fenced ```json ... ``` (most reliable for our prompt)
+    # Try with closing fence first, then without (truncated response).
     fence_idx = raw.find("```json")
     if fence_idx != -1:
         start = fence_idx + len("```json")
-        # skip optional language tag on the same line
         nl = raw.find("\n", start)
         if nl != -1:
             start = nl + 1
         end = raw.find("```", start)
+        candidates: list[str] = []
         if end != -1:
-            inner = raw[start:end].strip()
-            # find balanced outer { ... } in inner
+            candidates.append(raw[start:end].strip())
+        # Also try without closing fence (truncated response)
+        candidates.append(raw[start:].strip())
+        for inner in candidates:
+            body = _extract_body_field(inner)
+            if body and len(body) > 50:
+                return body
             obj_text = _extract_outer_json(inner)
             if obj_text:
                 try:
@@ -271,6 +277,9 @@ def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> s
                 return obj["body"]
         except Exception:
             pass
+        body = _extract_body_field(obj_text)
+        if body and len(body) > 50:
+            return body
 
     # Strategy 3: fenced ```markdown ... ```
     fence_idx = raw.find("```markdown")
@@ -289,6 +298,63 @@ def _parse_llm_response(raw: str, units: Sequence[dict], frontmatter: dict) -> s
                 return raw[s + 1 : e].strip()
 
     return raw
+
+
+def _extract_body_field(text: str) -> str | None:
+    """Extract the "body" field from a JSON-ish string, even if the surrounding
+    JSON is malformed or the body is truncated.
+    Returns the decoded body content, or None if not found.
+    """
+    body_key_idx = text.find('"body"')
+    if body_key_idx == -1:
+        return None
+    colon_idx = text.find(':', body_key_idx)
+    if colon_idx == -1:
+        return None
+    i = colon_idx + 1
+    while i < len(text) and text[i] in " \t\n":
+        i += 1
+    if i >= len(text) or text[i] != '"':
+        return None
+    i += 1
+    out: list[str] = []
+    while i < len(text):
+        c = text[i]
+        if c == '\\':
+            if i + 1 >= len(text):
+                return "".join(out) if out else None
+            esc = text[i + 1]
+            if esc == 'n':
+                out.append('\n')
+            elif esc == 't':
+                out.append('\t')
+            elif esc == 'r':
+                out.append('\r')
+            elif esc in ('\\', '"', '/'):
+                out.append(esc)
+            elif esc == 'b':
+                out.append('\b')
+            elif esc == 'f':
+                out.append('\f')
+            elif esc == 'u':
+                if i + 5 < len(text):
+                    try:
+                        out.append(chr(int(text[i + 2:i + 6], 16)))
+                        i += 4
+                    except Exception:
+                        out.append(esc)
+                else:
+                    out.append(esc)
+            else:
+                out.append(esc)
+            i += 2
+        elif c == '"':
+            return "".join(out)
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out) if out else None
+
 
 
 def _extract_outer_json(text: str, from_end: bool = False) -> str | None:

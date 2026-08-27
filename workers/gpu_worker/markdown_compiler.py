@@ -71,7 +71,7 @@ def _http_complete(prompt: str, max_tokens: int, model_alias: str) -> str:
     if httpx is None:
         return ""
     try:
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=600.0) as client:
             r = client.post(
                 f"{_base().rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {_api_key()}",
@@ -99,8 +99,11 @@ def _http_complete(prompt: str, max_tokens: int, model_alias: str) -> str:
         return ""
 
 
-async def _complete(prompt: str, max_tokens: int = 4096) -> str:
-    max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1600"))
+async def _complete(prompt: str, max_tokens: int = 8192) -> str:
+    # The prompt asks for 200-2000 words plus JSON wrapping and a footnote
+    # block — 1600 tokens cut responses mid-JSON (truncated bodies). 8192
+    # lets the model finish the full JSON object.
+    max_tokens = int(os.getenv("LOCAL_LLM_MAX_TOKENS", "8192"))
     max_attempts = int(os.getenv("LOCAL_LLM_MAX_ATTEMPTS", "6"))
     aliases = _aliases()
     for attempt in range(1, max_attempts + 1):
@@ -497,7 +500,7 @@ async def compile_page(topic_path: str, units: Sequence[dict], frontmatter: dict
         )
 
     prompt = _build_prompt(topic_path, units, frontmatter)
-    raw = await _complete(prompt, max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "1600")))
+    raw = await _complete(prompt, max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "8192")))
     if not raw:
         md = "> [!WARNING] Inferred by Pipeline: LLM compilation unavailable; raw appendix follows.\n\n"
         for idx, u in enumerate(unit_texts[:UNIT_LIMIT], 1):
@@ -507,6 +510,28 @@ async def compile_page(topic_path: str, units: Sequence[dict], frontmatter: dict
         )
 
     body = _parse_llm_response(raw, units, frontmatter)
+
+    # Quality gate: if the response didn't parse into a real wiki body (raw
+    # reasoning leak, unparsed JSON wrapper, truncated JSON), retry the whole
+    # completion a couple of times before falling back to the graceful
+    # appendix. Never write reasoning/JSON garbage to the DB.
+    if _is_bad_body(body):
+        for _ in range(2):
+            raw = await _complete(prompt, max_tokens=int(os.getenv("LOCAL_LLM_MAX_TOKENS", "8192")))
+            if not raw:
+                break
+            body = _parse_llm_response(raw, units, frontmatter)
+            if not _is_bad_body(body):
+                break
+
+    if _is_bad_body(body):
+        md = "> [!WARNING] Inferred by Pipeline: LLM compilation unavailable; raw appendix follows.\n\n"
+        for idx, u in enumerate(unit_texts[:UNIT_LIMIT], 1):
+            md += f"### Source Unit {idx}\n\n{u[:UNIT_TEXT_BUDGET]}\n\n"
+        return PageResult(
+            page_path=f"{topic_path}.md", markdown=md, coverage_score=0.0, citations=0
+        )
+
     coverage = 1.0 if body.strip() else 0.0
     return PageResult(
         page_path=f"{topic_path}.md",
@@ -514,3 +539,25 @@ async def compile_page(topic_path: str, units: Sequence[dict], frontmatter: dict
         coverage_score=coverage,
         citations=body.count("[^src_"),
     )
+
+
+def _is_bad_body(body: str) -> bool:
+    """True when a parsed LLM response is not a real wiki body: raw reasoning
+    leaks, unparsed JSON wrappers ({title, frontmatter, body}), or truncated
+    JSON — anything that would render as a giant code block."""
+    b = (body or "").lstrip()
+    if not b:
+        return True
+    # Raw fenced LLM wrapper that the parser failed to unwrap
+    first = b.splitlines()[0].strip().lower()
+    if first in ("```json", "```yaml", "```yml"):
+        return True
+    # Unparsed JSON object (truncated or complete wrapper)
+    if b.startswith("{") and ('"body"' in b[:600] or '"title"' in b[:600]):
+        return True
+    # Reasoning leak / refusal / canned text: anything with no markdown
+    # heading at all (the compile prompt always starts the body with a
+    # `# Title` line). The graceful fallback below starts with `>`.
+    if "#" not in b[:400] and not b.startswith(">"):
+        return True
+    return False

@@ -350,24 +350,31 @@ async def list_tasks(
     status: str | None = None,
     worker_id: uuid.UUID | None = None,
     limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     _admin: str = Depends(require_admin_token),
 ):
     engine = get_engine()
-    sql = "SELECT * FROM task_queue WHERE 1=1"
-    params: dict = {"lim": limit}
+    where = ["1=1"]
+    params: dict = {"lim": limit, "off": offset}
     if stage:
-        sql += " AND stage = :stage"
+        where.append("stage = :stage")
         params["stage"] = stage
     if status:
-        sql += " AND status = :status"
+        where.append("status = :status")
         params["status"] = status
     if worker_id:
-        sql += " AND leased_by = :wid"
+        where.append("leased_by = :wid")
         params["wid"] = worker_id
-    sql += " ORDER BY created_at DESC LIMIT :lim"
+    where_clause = " AND ".join(where)
     async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), params)).mappings().all()
-    return [dict(r) for r in rows]
+        count_row = (await conn.execute(
+            text(f"SELECT COUNT(*) AS n FROM task_queue WHERE {where_clause}"), params
+        )).first()
+        total = count_row[0] if count_row else 0
+        rows = (await conn.execute(
+            text(f"SELECT * FROM task_queue WHERE {where_clause} ORDER BY created_at DESC LIMIT :lim OFFSET :off"), params
+        )).mappings().all()
+    return {"tasks": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset}
 
 
 def _json_dumps(obj) -> str:

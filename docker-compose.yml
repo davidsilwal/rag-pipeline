@@ -69,6 +69,29 @@ services:
       redis:
         condition: service_healthy
 
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      # NEXT_PUBLIC_* values are inlined into the JS bundles at build time,
+      # so the API URL must be supplied here — and it must be reachable from
+      # the user's browser (Tailscale IP), not just from Docker DNS.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    image: rag-pipeline-dashboard:latest
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      # The dashboard authenticates against the control API with the same
+      # token the API itself validates (DASHBOARD_API_TOKEN == API_TOKEN).
+      DASHBOARD_API_TOKEN: ${API_TOKEN}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    ports:
+      - "3000:3000"
+    depends_on:
+      control-api:
+        condition: service_started
+
   worker:
     build:
       context: .
@@ -108,7 +131,8 @@ services:
       # with `LOCAL_LLM_API_BASE=http://<host>:<port>/v1`.
       LOCAL_LLM_API_BASE: http://litellm-proxy:4000/v1
       LITELLM_API_KEY: __REDACTED_LITELLM_KEY__
-      LOCAL_LLM_MAX_TOKENS: "1600"
+      LOCAL_LLM_MAX_TOKENS: "8192"
+      GRAPHRAG_MODELS: openrouter/nemotron-nano-omni,openrouter/nemotron-super,free
       LOCAL_LLM_MAX_ATTEMPTS: "8"
       LOCAL_LLM_FALLBACK_ALIASES: "free,free-auto,free-a,free-b,free-c,free-d,free-e,free-f,free-g,free-h,free-i,free-j,free-k"
     volumes:

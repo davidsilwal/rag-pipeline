@@ -102,13 +102,17 @@ export function useTasks(params?: {
   status?: string;
   worker_id?: string;
   limit?: number;
+  offset?: number;
 }) {
   const api = useApi();
   const key = `tasks:${JSON.stringify(params || {})}`;
   const swr = useSWR(key, () => api.listTasks(params), {
     refreshInterval: 10_000,
   });
-  return { ...swr, data: asArray(swr.data) };
+  const raw = swr.data;
+  const data = raw && typeof raw === "object" && "tasks" in raw ? raw.tasks : asArray(raw);
+  const total = raw && typeof raw === "object" && "total" in raw ? raw.total : (data?.length ?? 0);
+  return { ...swr, data, total };
 }
 
 export function useJobs() {

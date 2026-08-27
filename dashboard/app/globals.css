@@ -50,6 +50,11 @@ body {
   border-radius: 0.5rem;
 }
 
+/* Keep anchored headings (TOC links) clear of the top edge when scrolled to */
+.prose :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 1.5rem;
+}
+
 .prose code:not(pre code) {
   background: #f4f4f5;
   padding: 0.15rem 0.35rem;

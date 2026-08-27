@@ -81,6 +81,90 @@ export interface WikiChunk {
   created_at: string | null;
 }
 
+export interface WikiGraphTerm {
+  term: string;
+  weight: number;
+}
+
+export interface WikiGraphNode {
+  id: string;
+  title: string;
+  file_path: string;
+  page_type: string;
+  subfolder: string;
+  preview: string;
+  /** Node lives outside the selected scope (cross-project link target). */
+  cross?: boolean;
+  /** Cluster node in the whole-wiki macro view (a project or area). */
+  cluster?: boolean;
+  /** Cluster kind: "project" | "area". */
+  kind?: string;
+  /** Pages in a cluster node. */
+  count?: number;
+  /** Top distinctive terms with relative weights (comparison panel). */
+  top_terms?: WikiGraphTerm[];
+}
+
+export interface WikiGraphLink {
+  source: string;
+  target: string;
+  score: number;
+  /** Edge connects a scope page to a related page outside the scope. */
+  cross?: boolean;
+  /** Top shared terms between the endpoints (drawn as edge labels). */
+  terms?: string[];
+  /** Shared terms weighted by the weaker side (comparison panel bars). */
+  term_weights?: WikiGraphTerm[];
+}
+
+export interface WikiGraphResponse {
+  scope: string;
+  nodes: WikiGraphNode[];
+  links: WikiGraphLink[];
+}
+
+// ── GraphRAG ─────────────────────────────────────────────────────────────────
+export interface GraphragEntity {
+  entity_id: string;
+  name: string;
+  entity_type: string;
+  description: string;
+  frequency: number;
+}
+
+export interface GraphragRelationship {
+  rel_id: string;
+  source: string;
+  source_type: string;
+  target: string;
+  target_type: string;
+  relationship_type: string;
+  description: string;
+  weight: number;
+}
+
+export interface GraphragCommunity {
+  community_id: string;
+  level: number;
+  title: string;
+  summary: string;
+  member_entities: string[];
+}
+
+export interface GraphragStats {
+  entities: number;
+  relationships: number;
+  communities: number;
+  by_type: { type: string; count: number }[];
+}
+
+export interface GraphragProgress {
+  processed: number;
+  total: number;
+  task_status: string | null;
+  task_attempts: number;
+}
+
 // ── Search ───────────────────────────────────────────────────────────────────
 export interface SearchResult {
   chunk_id: string;

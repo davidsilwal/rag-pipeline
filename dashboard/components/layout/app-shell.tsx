@@ -1,27 +1,31 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Sidebar } from "./sidebar";
 import { Header } from "./header";
 
+const emptySubscribe = () => () => {};
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, token } = useAuth();
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
+  // True only after hydration: the server snapshot is always false so the
+  // prerendered HTML shows the loading state and never mismatches.
+  const hydrated = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    if (mounted && !isAuthenticated) {
+    if (hydrated && !isAuthenticated) {
       router.push("/login");
     }
-  }, [mounted, isAuthenticated, router]);
+  }, [hydrated, isAuthenticated, router]);
 
-  if (!mounted) {
+  if (!hydrated) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="animate-pulse text-zinc-400">Loading...</div>

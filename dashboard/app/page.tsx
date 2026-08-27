@@ -11,11 +11,10 @@ import {
 import { AppShell } from "@/components/layout/app-shell";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge, Badge } from "@/components/ui/badge";
-import { useHealth, useMetrics, useAlerts, useSources } from "@/lib/hooks";
+import { useMetrics, useAlerts, useSources } from "@/lib/hooks";
 import { relativeTime, stageLabel } from "@/lib/utils";
 
 export default function DashboardPage() {
-  const { data: health } = useHealth();
   const { data: metrics } = useMetrics();
   const { data: alerts } = useAlerts();
   const { data: sources } = useSources(undefined, 8);
@@ -24,7 +23,6 @@ export default function DashboardPage() {
     metrics?.workers_by_status?.reduce((acc, w) => acc + w.n, 0) ?? 0;
   const onlineWorkers =
     metrics?.workers_by_status?.find((w) => w.status === "online")?.n ?? 0;
-  const staleLeases = metrics?.stale_leases ?? 0;
 
   // Aggregate queue counts (guard: API may return error object instead of array)
   const qbs = Array.isArray(metrics?.queue_by_stage_status)
@@ -80,7 +78,8 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Alerts */}          {Array.isArray(alerts?.alerts) && (alerts?.count ?? 0) > 0 && (
+        {/* Alerts */}
+        {Array.isArray(alerts?.alerts) && (alerts?.count ?? 0) > 0 && (
           <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-4">
             <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">
               <AlertTriangle className="h-4 w-4" />

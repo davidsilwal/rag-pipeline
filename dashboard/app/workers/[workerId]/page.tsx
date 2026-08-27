@@ -7,7 +7,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { StatusBadge, Badge } from "@/components/ui/badge";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useWorker } from "@/lib/hooks";
-import { relativeTime, formatDate, cn } from "@/lib/utils";
+import { relativeTime, cn } from "@/lib/utils";
 
 export default function WorkerDetailPage({
   params,

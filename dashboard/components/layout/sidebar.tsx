@@ -6,6 +6,8 @@ import {
   LayoutDashboard,
   FileStack,
   BookOpen,
+  Network,
+  GitBranch,
   Search,
   ListTodo,
   Users,
@@ -13,6 +15,7 @@ import {
   Activity,
   LogOut,
   Settings,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -21,7 +24,10 @@ import { useAlerts } from "@/lib/hooks";
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/sources", label: "Sources", icon: FileStack },
+  { href: "/process", label: "Process", icon: Play },
   { href: "/wiki", label: "Wiki", icon: BookOpen },
+  { href: "/wiki/graph", label: "Graph", icon: Network },
+  { href: "/knowledge-graph", label: "Knowledge", icon: GitBranch },
   { href: "/search", label: "Search", icon: Search },
   { href: "/tasks", label: "Tasks", icon: ListTodo },
   { href: "/workers", label: "Workers", icon: Users },
@@ -47,7 +53,11 @@ export function Sidebar() {
           const active =
             item.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(item.href);
+              : item.href === "/wiki"
+                ? pathname === "/wiki" ||
+                  (pathname.startsWith("/wiki/") &&
+                    !pathname.startsWith("/wiki/graph"))
+                : pathname.startsWith(item.href);
           return (
             <Link
               key={item.href}

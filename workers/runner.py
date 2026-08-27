@@ -432,12 +432,105 @@ async def handle_consensus(api: ApiClient, cfg: dict, task: dict) -> dict:
 
 
 async def handle_graphrag(api: ApiClient, cfg: dict, task: dict) -> dict:
-    from workers.gpu_worker.graphrag_engine import extract_for_units
-    units = await _fetch_units(api, task["scope_id"])
-    texts = [u.get("clean_text", "") for u in units if u.get("clean_text")]
-    g = await extract_for_units(texts)
-    return {"entities": len(g.entities), "relationships": len(g.relationships),
-            "communities": len(g.communities)}
+    """Stage 7: Extract entities, relationships, and communities from units.
+
+    Uses the LLM to build a knowledge graph, then persists it to the DB.
+
+    For corpus-scope tasks, sources are batched together (50 sources per
+    LLM call) to reduce the total number of LLM calls from ~14K to ~300.
+    Sources with < 300 chars of total text are skipped.
+    """
+    from workers.gpu_worker.graphrag_engine import extract_for_units, save_graphrag_results
+
+    scope_id = task["scope_id"]
+    MIN_TEXT_CHARS = 300       # skip tiny sources
+    SOURCES_PER_LLM = 50      # batch N sources per LLM call
+    MAX_CHARS_PER_SRC = 1200   # truncate each source's combined text
+
+    if scope_id and scope_id != "corpus":
+        units = await _fetch_units(api, scope_id)
+        texts = [u.get("clean_text", "") for u in units if u.get("clean_text")]
+        unit_ids = [u.get("unit_id") for u in units if u.get("unit_id")]
+        if not texts:
+            return {"entities": 0, "relationships": 0, "communities": 0, "note": "no units"}
+        g = await extract_for_units(texts)
+        saved = await save_graphrag_results(g, unit_ids)
+        return {"entities": len(g.entities), "relationships": len(g.relationships),
+                "communities": len(g.communities), "saved": saved}
+
+    # Corpus-scope: two-step approach:
+    # 1) Get source metadata (source_ids + unit counts) in ONE bulk query
+    # 2) Fetch text in small batches and extract per LLM-call batch.
+    src_data = await api.get("/units/by-source", params={"min_chars": MIN_TEXT_CHARS, "limit": 100000})
+    sources = src_data if isinstance(src_data, list) else []
+    log.info("graphrag corpus: %d eligible sources in one bulk query", len(sources))
+
+    total_entities = 0
+    total_rels = 0
+    total_communities = 0
+    total_saved = {"entities": 0, "relationships": 0, "communities": 0}
+    total_llm_batches = (len(sources) + SOURCES_PER_LLM - 1) // SOURCES_PER_LLM
+
+    # Process in LLM batches. For each LLM batch, first fetch text via
+    # /units/text-batch (one HTTP call per LLM batch, not per source),
+    # then run multiple LLM calls in parallel.
+    CONCURRENT_LLM = 8  # parallel LLM calls within each batch
+
+    for llm_idx in range(0, len(sources), SOURCES_PER_LLM):
+        llm_batch = sources[llm_idx:llm_idx + SOURCES_PER_LLM]
+        llm_batch_num = llm_idx // SOURCES_PER_LLM + 1
+        src_ids = ",".join(s["source_id"] for s in llm_batch)
+
+        # Fetch combined text for this batch in one HTTP call
+        try:
+            text_data = await api.get("/units/text-batch", params={"source_ids": src_ids, "max_chars_per_source": MAX_CHARS_PER_SRC})
+        except Exception as e:
+            log.warning("graphrag text-batch %d failed: %s", llm_batch_num, e)
+            continue
+        text_rows = text_data if isinstance(text_data, list) else []
+
+        # Split into sub-groups for parallel LLM calls
+        sub_size = max(1, len(text_rows) // CONCURRENT_LLM)
+        sub_groups = []
+        for i in range(0, len(text_rows), sub_size):
+            sub_groups.append(text_rows[i:i + sub_size])
+
+        async def _process_subgroup(sub_rows: list) -> dict:
+            batch_texts = [r.get("combined_text", "") for r in sub_rows if r.get("combined_text", "").strip()]
+            batch_unit_ids = []
+            for r in sub_rows:
+                batch_unit_ids.extend(r.get("unit_ids", []))
+            if not batch_texts:
+                return {"entities": 0, "rels": 0, "communities": 0, "saved": {"entities": 0, "relationships": 0, "communities": 0}}
+            g = await extract_for_units(batch_texts)
+            saved = await save_graphrag_results(g, batch_unit_ids)
+            return {"entities": len(g.entities), "rels": len(g.relationships), "communities": len(g.communities), "saved": saved}
+
+        # Run sub-groups in parallel
+        results = await asyncio.gather(*[_process_subgroup(sg) for sg in sub_groups])
+
+        batch_entities = sum(r["entities"] for r in results)
+        batch_rels = sum(r["rels"] for r in results)
+        batch_communities = sum(r["communities"] for r in results)
+        for r in results:
+            for k in total_saved:
+                total_saved[k] += r["saved"].get(k, 0)
+        total_entities += batch_entities
+        total_rels += batch_rels
+        total_communities += batch_communities
+
+        log.info("graphrag batch %d/%d: %d entities, %d rels, %d communities",
+                 llm_batch_num, total_llm_batches,
+                 batch_entities, batch_rels, batch_communities)
+
+    return {
+        "entities": total_entities,
+        "relationships": total_rels,
+        "communities": total_communities,
+        "saved": total_saved,
+        "sources_processed": len(sources),
+        "sources_skipped": 0,
+    }
 
 
 async def handle_compile(api: ApiClient, cfg: dict, task: dict) -> dict:
@@ -608,6 +701,21 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
     worker_token = reg["token"]
     # From here on authenticate with the per-worker token (plan §13).
     api.set_token(worker_token)
+
+    # ------------------------------------------------------------------
+    # Worker-level heartbeat (keeps the worker "online" in the control API).
+    # Without this, the sweeper marks the worker offline after 3×30s = 90s
+    # even though it's actively processing long-running tasks.
+    # ------------------------------------------------------------------
+    async def _worker_heartbeat_loop():
+        while True:
+            await asyncio.sleep(15)
+            try:
+                await api.post(f"/workers/{worker_id}/heartbeat", {"load": {}})
+            except Exception:
+                pass
+
+    hb_task = asyncio.create_task(_worker_heartbeat_loop())
 
     # ------------------------------------------------------------------
     # Main task loop

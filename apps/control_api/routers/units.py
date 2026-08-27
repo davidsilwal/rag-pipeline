@@ -139,4 +139,94 @@ async def list_units(source_id: str | None = None, limit: int = Query(1000, ge=1
     return [dict(r) for r in rows]
 
 
+@router.get("/by-source", summary="Bulk: source metadata for graphrag")
+async def units_by_source(
+    min_chars: int = Query(300, ge=0),
+    limit: int = Query(10000, ge=1, le=100000),
+):
+    """Return one row per source with unit_ids and char counts.
+    Text is NOT returned here to keep the query fast; the worker
+    fetches text per-batch via the existing ``?source_id=`` filter.
+    """
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text("""
+                    SELECT
+                        source_id,
+                        SUM(length(clean_text)) AS total_chars,
+                        COUNT(*) AS unit_count,
+                        array_agg(unit_id ORDER BY unit_index) AS unit_ids
+                    FROM units
+                    WHERE clean_text IS NOT NULL
+                    GROUP BY source_id
+                    HAVING SUM(length(COALESCE(clean_text, ''))) >= :min_chars
+                    ORDER BY SUM(length(clean_text)) DESC
+                    LIMIT :lim
+                """),
+                {"min_chars": min_chars, "lim": limit},
+            )
+        ).mappings().all()
+
+    return [{
+        "source_id": str(r["source_id"]),
+        "unit_ids": [str(u) for u in (r["unit_ids"] or [])],
+        "unit_count": r["unit_count"],
+        "total_chars": r["total_chars"],
+    } for r in rows]
+
+
+@router.get("/text-batch", summary="Bulk: fetch combined text for multiple sources")
+async def text_batch(
+    source_ids: str = Query(..., commaSeparated=True),
+    max_chars_per_source: int = Query(2000, ge=100, le=20000),
+):
+    """Return combined clean_text for a list of source_ids in one SQL call.
+    ``source_ids`` is a comma-separated list of UUIDs.
+    """
+    ids = [s.strip() for s in source_ids.split(",") if s.strip()]
+    if not ids:
+        return []
+    # Validate UUIDs to prevent injection
+    import uuid as _uuid
+    valid_ids = []
+    for i in ids:
+        try:
+            valid_ids.append(_uuid.UUID(i))
+        except (TypeError, ValueError):
+            pass
+    if not valid_ids:
+        return []
+    engine = get_engine()
+    placeholders = ",".join(f":id{j}" for j in range(len(valid_ids)))
+    params = {f"id{j}": v for j, v in enumerate(valid_ids)}
+    params["max_chars"] = max_chars_per_source
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(f"""
+                    SELECT
+                        source_id,
+                        SUM(length(clean_text)) AS total_chars,
+                        array_agg(unit_id ORDER BY unit_index) AS unit_ids,
+                        LEFT(string_agg(
+                            CASE WHEN clean_text IS NOT NULL THEN clean_text ELSE '' END,
+                            ' ' ORDER BY unit_index
+                        ), :max_chars) AS combined_text
+                    FROM units
+                    WHERE source_id IN ({placeholders})
+                      AND clean_text IS NOT NULL
+                    GROUP BY source_id
+                """),
+                params,
+            )
+        ).mappings().all()
+
+    return [{
+        "source_id": str(r["source_id"]),
+        "unit_ids": [str(u) for u in (r["unit_ids"] or [])],
+        "total_chars": r["total_chars"],
+        "combined_text": r["combined_text"] or "",
+    } for r in rows]
 

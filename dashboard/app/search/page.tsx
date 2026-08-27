@@ -109,43 +109,61 @@ export default function SearchPage() {
             <p className="text-sm text-zinc-500">
               {results.length} results found
             </p>
-            {results.map((r) => (
-              <div
-                key={r.chunk_id}
-                className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="h-4 w-4 text-zinc-400 shrink-0" />
-                    {r.file_path && (
-                      <span className="text-xs text-zinc-500 truncate">
-                        {r.file_path}
-                      </span>
+            {results.map((r) => {
+              const wikiHref = r.file_path
+                ? `/wiki/${r.file_path.split("/").map(encodeURIComponent).join("/")}`
+                : null;
+              const card = (
+                <>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="h-4 w-4 text-zinc-400 shrink-0" />
+                      {r.file_path && (
+                        <span className="text-xs text-zinc-500 truncate">
+                          {r.file_path}
+                        </span>
+                      )}
+                    </div>
+                    {r.rank != null && (
+                      <Badge variant="info">
+                        Score: {r.rank.toFixed(3)}
+                      </Badge>
+                    )}
+                    {r.rrf_score != null && (
+                      <Badge variant="info">
+                        RRF: {r.rrf_score.toFixed(4)}
+                      </Badge>
                     )}
                   </div>
-                  {r.rank != null && (
-                    <Badge variant="info">
-                      Score: {r.rank.toFixed(3)}
-                    </Badge>
+                  {r.heading_path && r.heading_path.length > 0 && (
+                    <div className="text-xs text-zinc-400 mb-2">
+                      {r.heading_path.join(" → ")}
+                    </div>
                   )}
-                  {r.rrf_score != null && (
-                    <Badge variant="info">
-                      RRF: {r.rrf_score.toFixed(4)}
-                    </Badge>
+                  {r.content && (
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-4">
+                      {truncate(r.content, 500)}
+                    </p>
                   )}
+                </>
+              );
+              return wikiHref ? (
+                <Link
+                  key={r.chunk_id}
+                  href={wikiHref}
+                  className="block rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors"
+                >
+                  {card}
+                </Link>
+              ) : (
+                <div
+                  key={r.chunk_id}
+                  className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4"
+                >
+                  {card}
                 </div>
-                {r.heading_path && r.heading_path.length > 0 && (
-                  <div className="text-xs text-zinc-400 mb-2">
-                    {r.heading_path.join(" → ")}
-                  </div>
-                )}
-                {r.content && (
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-4">
-                    {truncate(r.content, 500)}
-                  </p>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

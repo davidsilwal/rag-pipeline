@@ -48,10 +48,40 @@ async def checkpoint(payload: CheckpointRequest, _tok: str = Depends(require_any
 
 
 @router.get("/", summary="List job runs")
-async def list_jobs(_tok: str = Depends(require_any_token)):
+async def list_jobs(
+    status: str | None = None,
+    stage: str | None = None,
+    job_type: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    _tok: str = Depends(require_any_token),
+):
     engine = get_engine()
     async with engine.connect() as conn:
-        from sqlalchemy import select
-        result = await conn.execute(select(PipelineJob).order_by(PipelineJob.started_at.desc()))
+        from sqlalchemy import text as sa_text
+        where: list[str] = []
+        params: dict = {"lim": limit, "off": offset}
+        if status:
+            where.append("status = :status")
+            params["status"] = status
+        if stage:
+            where.append("stage = :stage")
+            params["stage"] = stage
+        if job_type:
+            where.append("job_type = :job_type")
+            params["job_type"] = job_type
+        where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+        # Total count for pagination
+        count_row = (await conn.execute(
+            sa_text(f"SELECT COUNT(*) AS n FROM pipeline_jobs{where_clause}"), params
+        )).first()
+        total = count_row[0] if count_row else 0
+        # Fetch page
+        result = await conn.execute(
+            sa_text(
+                f"SELECT * FROM pipeline_jobs{where_clause} ORDER BY started_at DESC LIMIT :lim OFFSET :off"
+            ),
+            params,
+        )
         rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return {"jobs": [dict(r) for r in rows], "total": total, "limit": limit, "offset": offset}

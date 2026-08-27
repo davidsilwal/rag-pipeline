@@ -1,9 +1,9 @@
-import { Suspense } from "react";
 import Link from "next/link";
 import { unstable_noStore as noStore } from "next/cache";
-import { ArrowLeft, FileText } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { WikiPageContentServer } from "./wiki-page-content-server";
+import { RefreshButton } from "./refresh-button";
 
 interface WikiApiPage {
   page_id: string;
@@ -15,6 +15,8 @@ interface WikiApiPage {
   frontmatter?: Record<string, unknown>;
   markdown_body: string;
   source_unit_ids?: string[];
+  git_commit_sha?: string | null;
+  last_verified_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -23,6 +25,36 @@ interface WikiDetail {
   source_id?: string;
   source_status?: string;
   message?: string;
+}
+
+export interface WikiSibling {
+  page_id: string;
+  file_path: string;
+  title: string;
+  updated_at?: string | null;
+}
+
+// Sibling pages in the same folder as the current page (used by the
+// "More in …" sidebar on the reader).
+async function fetchSiblingPages(
+  base: string,
+  prefix: string,
+  token: string,
+  excludeId: string,
+): Promise<WikiSibling[]> {
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  try {
+    const res = await fetch(
+      `${base}/wiki/pages?limit=50&prefix=${encodeURIComponent(prefix)}`,
+      { cache: "no-store", headers },
+    );
+    if (!res.ok) return [];
+    const pages = (await res.json()) as WikiSibling[];
+    return pages.filter((p) => p.page_id !== excludeId);
+  } catch {
+    return [];
+  }
 }
 
 function isUuid(value: string): boolean {
@@ -118,6 +150,21 @@ export default async function WikiSlugPage({
     process.env.DASHBOARD_API_TOKEN ?? "",
   );
 
+  // Siblings = pages in the same folder (e.g. projects/mozambique/).
+  let siblings: WikiSibling[] = [];
+  if (result.ok) {
+    const parts = (result.page.file_path ?? "").split("/").filter(Boolean);
+    if (parts.length >= 2) {
+      const prefix = `${parts.slice(0, -1).join("/")}/`;
+      siblings = await fetchSiblingPages(
+        process.env.NEXT_PUBLIC_API_URL ?? "",
+        prefix,
+        process.env.DASHBOARD_API_TOKEN ?? "",
+        result.page.page_id,
+      );
+    }
+  }
+
   const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "";
 
   return (
@@ -137,7 +184,7 @@ export default async function WikiSlugPage({
               API URL not configured
             </h2>
             <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
-              The dashboard's <code className="text-xs">NEXT_PUBLIC_API_URL</code>{" "}
+              The dashboard&apos;s <code className="text-xs">NEXT_PUBLIC_API_URL</code>{" "}
               environment variable is not set. The control-api typically lives
               on <code className="text-xs">http://100.72.153.12:8000/api/v1</code>.
             </p>
@@ -149,9 +196,7 @@ export default async function WikiSlugPage({
         ) : !result.ok ? (
           <PendingOrMissing detail={result.detail} slug={slug} />
         ) : (
-          <div className="flex gap-6">
-            <WikiPageContentServer page={result.page} />
-          </div>
+          <WikiPageContentServer page={result.page} siblings={siblings} />
         )}
       </div>
     </AppShell>
@@ -166,19 +211,26 @@ function PendingOrMissing({
   slug: string;
 }) {
   if (detail && detail.source_id) {
+    const sourceFailed =
+      detail.source_status === "error" || detail.source_status === "quarantine";
     return (
       <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-6">
-        <h2 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
-          Wiki page not yet generated
-        </h2>
-        <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
-          {detail.message ??
-            "Wiki page for this source has not been compiled yet."}
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-amber-900 dark:text-amber-100 mb-2">
+              Wiki page not yet generated
+            </h2>
+            <p className="text-sm text-amber-800 dark:text-amber-200 mb-3">
+              {detail.message ??
+                "Wiki page for this source has not been compiled yet."}
+            </p>
+          </div>
+          <RefreshButton />
+        </div>
         <div className="grid grid-cols-2 gap-3 text-xs">
           <div>
             <div className="text-amber-700 dark:text-amber-300">Source ID</div>
-            <code className="text-amber-900 dark:text-amber-100">
+            <code className="text-amber-900 dark:text-amber-100 break-all">
               {detail.source_id}
             </code>
           </div>
@@ -190,8 +242,9 @@ function PendingOrMissing({
           </div>
         </div>
         <p className="text-xs text-amber-700 dark:text-amber-300 mt-3">
-          The compile task is queued and will produce the page shortly.
-          Refresh this URL in a minute or two.
+          {sourceFailed
+            ? "The source did not compile into a wiki page. Check the source status and pipeline tasks, then re-run the compile stage."
+            : "The compile task is queued and will produce the page shortly."}
         </p>
         <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
           File: <code className="text-xs">{slug}</code>
@@ -200,9 +253,14 @@ function PendingOrMissing({
     );
   }
   return (
-    <div className="text-zinc-400">
-      <div className="font-medium mb-1">Page not found</div>
-      <div className="text-xs">No wiki page or source for {slug}</div>
+    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-8 text-center">
+      <RefreshCw className="h-8 w-8 mx-auto mb-3 text-zinc-300" />
+      <div className="font-medium text-zinc-600 dark:text-zinc-300 mb-1">
+        Page not found
+      </div>
+      <div className="text-xs text-zinc-400">
+        No wiki page or source for {slug}
+      </div>
     </div>
   );
 }

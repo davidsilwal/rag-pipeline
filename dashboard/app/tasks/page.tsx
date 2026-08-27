@@ -1,16 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import Link from "next/link";
-import {
-  ListTodo,
-  RefreshCw,
-  RotateCcw,
-  AlertTriangle,
-} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ListTodo, RefreshCw, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { StatusBadge, Badge } from "@/components/ui/badge";
-import { useTasks, useApi } from "@/lib/hooks";
+import { useApi } from "@/lib/hooks";
 import {
   relativeTime,
   shortId,
@@ -18,30 +12,60 @@ import {
   stageLabel,
 } from "@/lib/utils";
 import { PIPELINE_STAGES } from "@/lib/types";
+import type { Task } from "@/lib/types";
+
+const PAGE_SIZE = 100;
 
 export default function TasksPage() {
+  const api = useApi();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
   const [stage, setStage] = useState("");
   const [status, setStatus] = useState("");
-  const [limit, setLimit] = useState(100);
-  const { data: tasks, mutate } = useTasks({
-    stage: stage || undefined,
-    status: status || undefined,
-    limit,
-  });
-  const api = useApi();
   const [requeuing, setRequeuing] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api.listTasks({
+        stage: stage || undefined,
+        status: status || undefined,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      });
+      setTasks(res.tasks);
+      setTotal(res.total);
+    } catch {
+      setTasks([]);
+      setTotal(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [api, page, stage, status]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const resetPage = () => setPage(0);
+  const totalPages = Math.ceil(total / PAGE_SIZE);
 
   const handleRequeue = async (id: string) => {
     setRequeuing(id);
     try {
       await api.requeueTask(id);
-      mutate();
+      load();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Requeue failed");
     } finally {
       setRequeuing(null);
     }
   };
+
+  const selectClass =
+    "rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm";
 
   return (
     <AppShell>
@@ -53,13 +77,13 @@ export default function TasksPage() {
           </h2>
           <div className="flex items-center gap-3">
             <span className="text-sm text-zinc-500">
-              {tasks?.length ?? 0} tasks
+              {total} total tasks
             </span>
             <button
-              onClick={() => mutate()}
+              onClick={load}
               className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-700"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
             </button>
           </div>
@@ -69,8 +93,8 @@ export default function TasksPage() {
         <div className="flex items-center gap-3">
           <select
             value={stage}
-            onChange={(e) => setStage(e.target.value)}
-            className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm"
+            onChange={(e) => { setStage(e.target.value); resetPage(); }}
+            className={selectClass}
           >
             <option value="">All stages</option>
             {PIPELINE_STAGES.map((s) => (
@@ -81,24 +105,16 @@ export default function TasksPage() {
           </select>
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm"
+            onChange={(e) => { setStatus(e.target.value); resetPage(); }}
+            className={selectClass}
           >
             <option value="">All statuses</option>
             <option value="queued">Queued</option>
             <option value="claimed">Claimed</option>
+            <option value="running">Running</option>
             <option value="succeeded">Succeeded</option>
             <option value="failed">Failed</option>
             <option value="dead_letter">Dead Letter</option>
-          </select>
-          <select
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
-            className="rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm"
-          >
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={500}>500</option>
           </select>
         </div>
 
@@ -134,8 +150,8 @@ export default function TasksPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {!tasks ? (
-                [...Array(5)].map((_, i) => (
+              {loading ? (
+                [...Array(10)].map((_, i) => (
                   <tr key={i}>
                     <td colSpan={8} className="px-4 py-3">
                       <div className="h-4 bg-zinc-100 dark:bg-zinc-800 rounded animate-pulse" />
@@ -198,6 +214,61 @@ export default function TasksPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-zinc-500">
+              Page {page + 1} of {totalPages} ({total} tasks)
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                <ChevronLeft className="h-3 w-3" />
+                Previous
+              </button>
+              {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                let pageNum: number;
+                if (totalPages <= 7) {
+                  pageNum = i;
+                } else if (page < 3) {
+                  pageNum = i;
+                } else if (page > totalPages - 4) {
+                  pageNum = totalPages - 7 + i;
+                } else {
+                  pageNum = page - 3 + i;
+                }
+                return (
+                  <button
+                    key={pageNum}
+                    type="button"
+                    onClick={() => setPage(pageNum)}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                      pageNum === page
+                        ? "bg-indigo-600 text-white"
+                        : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    }`}
+                  >
+                    {pageNum + 1}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page >= totalPages - 1}
+                className="inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+              >
+                Next
+                <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   );

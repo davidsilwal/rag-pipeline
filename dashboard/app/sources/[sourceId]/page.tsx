@@ -6,13 +6,7 @@ import { ArrowLeft, FileText, Box, Clock } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { StatusBadge } from "@/components/ui/badge";
 import { useSource, useUnits, useApi } from "@/lib/hooks";
-import {
-  formatBytes,
-  relativeTime,
-  formatDate,
-  truncate,
-  shortId,
-} from "@/lib/utils";
+import { formatBytes, relativeTime, truncate } from "@/lib/utils";
 import { CopyButton } from "@/components/ui/copy-button";
 import { useState } from "react";
 

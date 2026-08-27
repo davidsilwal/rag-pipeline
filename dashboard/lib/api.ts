@@ -4,6 +4,7 @@ import type {
   Unit,
   WikiPage,
   WikiChunk,
+  WikiGraphResponse,
   SearchResult,
   Worker,
   Task,
@@ -13,6 +14,11 @@ import type {
   Alert,
   OnboardRequest,
   OnboardResponse,
+  GraphragEntity,
+  GraphragRelationship,
+  GraphragCommunity,
+  GraphragStats,
+  GraphragProgress,
 } from "./types";
 
 class ApiClient {
@@ -117,15 +123,25 @@ class ApiClient {
   }
 
   // ── Wiki ─────────────────────────────────────────────────────────────────
-  listWikiPages(limit?: number) {
-    return this.request<WikiPage[]>(
-      "GET",
-      `/wiki/pages?limit=${limit || 50}`,
-    );
+  listWikiPages(limit?: number, prefix?: string) {
+    // limit <= 0 means "return everything" — the dashboard lists the full
+    // wiki and filters/paginates client-side. `prefix` narrows to pages under
+    // a folder path (used for the sibling-docs sidebar on the reader).
+    const lim = limit ?? 50;
+    const qs = prefix ? `&prefix=${encodeURIComponent(prefix)}` : "";
+    return this.request<WikiPage[]>("GET", `/wiki/pages?limit=${lim}${qs}`);
   }
 
   getWikiPage(id: string) {
     return this.request<WikiPage>("GET", `/wiki/pages/${id}`);
+  }
+
+  updateWikiPage(id: string, data: { markdown_body?: string; title?: string }) {
+    return this.request<{ page_id: string; status: string }>(
+      "PATCH",
+      `/wiki/pages/${id}`,
+      data,
+    );
   }
 
   getWikiPageByFile(filePath: string) {
@@ -133,6 +149,79 @@ class ApiClient {
       "GET",
       `/wiki/by-file/${encodeURIComponent(filePath)}`,
     );
+  }
+
+  listWikiChunks(params?: { page_id?: string; limit?: number }) {
+    const qs = new URLSearchParams();
+    if (params?.page_id) qs.set("page_id", params.page_id);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return this.request<WikiChunk[]>("GET", `/wiki/chunks/${q ? `?${q}` : ""}`);
+  }
+
+  getWikiGraph(
+    scope: string,
+    topK = 4,
+    minScore = 0.1,
+    cross = false,
+    crossK = 5,
+  ) {
+    const qs = new URLSearchParams({
+      scope,
+      top_k: String(topK),
+      min_score: String(minScore),
+      cross: String(cross),
+      cross_k: String(crossK),
+    });
+    return this.request<WikiGraphResponse>(
+      "GET",
+      `/wiki/graph?${qs.toString()}`,
+    );
+  }
+
+  // ── GraphRAG ────────────────────────────────────────────────────────────
+  listGraphragEntities(params?: {
+    limit?: number;
+    offset?: number;
+    entity_type?: string;
+    search?: string;
+  }) {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    if (params?.entity_type) qs.set("entity_type", params.entity_type);
+    if (params?.search) qs.set("search", params.search);
+    const q = qs.toString();
+    return this.request<GraphragEntity[]>("GET", `/wiki/graphrag/entities${q ? `?${q}` : ""}`);
+  }
+
+  listGraphragRelationships(params?: {
+    limit?: number;
+    offset?: number;
+    entity_id?: string;
+  }) {
+    const qs = new URLSearchParams();
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    if (params?.entity_id) qs.set("entity_id", params.entity_id);
+    const q = qs.toString();
+    return this.request<GraphragRelationship[]>("GET", `/wiki/graphrag/relationships${q ? `?${q}` : ""}`);
+  }
+
+  listGraphragCommunities(limit?: number, offset?: number) {
+    const qs = new URLSearchParams();
+    if (limit) qs.set("limit", String(limit));
+    if (offset) qs.set("offset", String(offset));
+    const q = qs.toString();
+    return this.request<GraphragCommunity[]>("GET", `/wiki/graphrag/communities${q ? `?${q}` : ""}`);
+  }
+
+  getGraphragStats() {
+    return this.request<GraphragStats>("GET", "/wiki/graphrag/stats");
+  }
+
+  getGraphragProgress() {
+    return this.request<GraphragProgress>("GET", "/wiki/graphrag/progress");
   }
 
   // ── Search ───────────────────────────────────────────────────────────────
@@ -169,14 +258,16 @@ class ApiClient {
     status?: string;
     worker_id?: string;
     limit?: number;
+    offset?: number;
   }) {
     const qs = new URLSearchParams();
     if (params?.stage) qs.set("stage", params.stage);
     if (params?.status) qs.set("status", params.status);
     if (params?.worker_id) qs.set("worker_id", params.worker_id);
     if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
     const q = qs.toString();
-    return this.request<Task[]>("GET", `/tasks/${q ? `?${q}` : ""}`);
+    return this.request<{ tasks: Task[]; total: number; limit: number; offset: number }>("GET", `/tasks/${q ? `?${q}` : ""}`);
   }
 
   requeueTask(id: string) {
@@ -184,8 +275,21 @@ class ApiClient {
   }
 
   // ── Jobs ─────────────────────────────────────────────────────────────────
-  listJobs() {
-    return this.request<PipelineJob[]>("GET", "/jobs/");
+  listJobs(params?: {
+    status?: string;
+    stage?: string;
+    job_type?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.stage) qs.set("stage", params.stage);
+    if (params?.job_type) qs.set("job_type", params.job_type);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const q = qs.toString();
+    return this.request<{ jobs: PipelineJob[]; total: number; limit: number; offset: number }>("GET", `/jobs/${q ? `?${q}` : ""}`);
   }
 
   // ── System ───────────────────────────────────────────────────────────────
@@ -197,6 +301,12 @@ class ApiClient {
     return this.request<{ alerts: Alert[]; count: number }>("GET", "/alerts");
   }
 }
+
+// Sent for "load the entire wiki" — large enough to exceed the page count
+// but small enough to keep a single request. Works against both the current
+// backend (which always applies LIMIT) and the updated one (which treats
+// limit <= 0 as "no limit").
+export const ALL_PAGES_LIMIT = 100_000;
 
 // Singleton factory
 let _client: ApiClient | null = null;

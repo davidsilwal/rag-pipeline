@@ -1,0 +1,14 @@
+# Dependencies and build artifacts
+node_modules
+.next
+tsconfig.tsbuildinfo
+
+# Secrets / local env (passed via --build-arg / -e at deploy time instead)
+.env*
+.env.local
+.env.*.local
+
+# VCS + misc
+.git
+.gitignore
+*.log

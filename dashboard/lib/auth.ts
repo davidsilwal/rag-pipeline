@@ -28,9 +28,9 @@ interface AuthState {
 }
 
 export const useAuth = create<AuthState>((set) => ({
-  token: "",
-  apiUrl: DEFAULT_API_URL,
-  isAuthenticated: false,
+  token: typeof window !== "undefined" ? (localStorage.getItem(TOKEN_KEY) || "") : "",
+  apiUrl: typeof window !== "undefined" ? (localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL) : DEFAULT_API_URL,
+  isAuthenticated: typeof window !== "undefined" ? !!localStorage.getItem(TOKEN_KEY) : false,
   setToken: (token: string) => {
     if (typeof window !== "undefined") {
       localStorage.setItem(TOKEN_KEY, token);
@@ -51,7 +51,7 @@ export const useAuth = create<AuthState>((set) => ({
   },
 }));
 
-// Initialize from localStorage on client load
+// Sync localStorage on client load (handles tab changes etc.)
 if (typeof window !== "undefined") {
   const token = readToken();
   const apiUrl = readApiUrl();

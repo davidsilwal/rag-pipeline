@@ -1,7 +1,7 @@
 # routes.py — Central API route registration
 from fastapi import APIRouter
 
-from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system
+from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system, export
 
 router = APIRouter()
 router.include_router(sources.router, prefix="/api/v1", tags=["sources"])
@@ -13,6 +13,7 @@ router.include_router(workers.router, prefix="/api/v1", tags=["workers"])
 router.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
 router.include_router(embed_cache.router, prefix="/api/v1", tags=["embed_cache"])
 router.include_router(system.router, prefix="/api/v1", tags=["system"])
+router.include_router(export.router, prefix="/api/v1", tags=["export"])
 
 api_router = router
 

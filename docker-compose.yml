@@ -151,6 +151,20 @@ services:
       - default
       - litellm-proxy_default
 
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    image: wiki-mcp-server:latest
+    restart: unless-stopped
+    mem_limit: 1024m
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 
 volumes:

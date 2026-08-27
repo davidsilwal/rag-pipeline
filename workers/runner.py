@@ -130,7 +130,7 @@ class ApiClient:
         self.token = token
         # follow_redirects: Starlette redirect_slashes turns /units → /units/ etc.
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=True
+            timeout=httpx.Timeout(120.0, connect=10.0), follow_redirects=True
         )
         self.set_token(token)
 
@@ -444,8 +444,8 @@ async def handle_graphrag(api: ApiClient, cfg: dict, task: dict) -> dict:
 
     scope_id = task["scope_id"]
     MIN_TEXT_CHARS = 300       # skip tiny sources
-    SOURCES_PER_LLM = 50      # batch N sources per LLM call
-    MAX_CHARS_PER_SRC = 1200   # truncate each source's combined text
+    SOURCES_PER_LLM = 15      # batch N sources per LLM call
+    MAX_CHARS_PER_SRC = 1500   # truncate each source's combined text
 
     if scope_id and scope_id != "corpus":
         units = await _fetch_units(api, scope_id)
@@ -482,12 +482,25 @@ async def handle_graphrag(api: ApiClient, cfg: dict, task: dict) -> dict:
         src_ids = ",".join(s["source_id"] for s in llm_batch)
 
         # Fetch combined text for this batch in one HTTP call
+        # Try the full batch first; on failure, split into smaller chunks
+        text_rows: list[dict] = []
         try:
             text_data = await api.get("/units/text-batch", params={"source_ids": src_ids, "max_chars_per_source": MAX_CHARS_PER_SRC})
+            text_rows = text_data if isinstance(text_data, list) else []
         except Exception as e:
-            log.warning("graphrag text-batch %d failed: %s", llm_batch_num, e)
-            continue
-        text_rows = text_data if isinstance(text_data, list) else []
+            log.warning("graphrag text-batch %d failed (%d sources), retrying in halves: %s",
+                        llm_batch_num, len(llm_batch), e)
+            # Retry with smaller chunks
+            half = len(llm_batch) // 2 or 1
+            for chunk_start in range(0, len(llm_batch), half):
+                chunk = llm_batch[chunk_start:chunk_start + half]
+                chunk_ids = ",".join(s["source_id"] for s in chunk)
+                try:
+                    chunk_data = await api.get("/units/text-batch", params={"source_ids": chunk_ids, "max_chars_per_source": MAX_CHARS_PER_SRC})
+                    text_rows.extend(chunk_data if isinstance(chunk_data, list) else [])
+                except Exception as e2:
+                    log.warning("graphrag text-batch retry also failed: %s", e2)
+                    continue
 
         # Split into sub-groups for parallel LLM calls
         sub_size = max(1, len(text_rows) // CONCURRENT_LLM)

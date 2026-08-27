@@ -14,13 +14,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from database import get_engine
-from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system
+from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system, export
 
 log = logging.getLogger("control-api")
 
 SWEEPER_INTERVAL_SECONDS = 30
 SCHEDULER_INTERVAL_SECONDS = 60
 HEARTBEAT_TTL_SECONDS = 30
+EXPORT_INTERVAL_SECONDS = 7 * 24 * 3600  # weekly
 
 
 async def _sweep() -> None:
@@ -87,11 +88,29 @@ async def _schedule_corpus() -> None:
         log.warning("scheduler failed: %s", e)
 
 
+async def _schedule_export() -> None:
+    """Run a weekly full data export and store on disk."""
+    try:
+        from routers.export import run_scheduled_export
+        await run_scheduled_export()
+    except Exception as e:  # pragma: no cover
+        log.warning("export scheduler failed: %s", e)
+
+
 async def _background_loop() -> None:
+    sweep_count = 0
+    export_count = 0
     while True:
         await _sweep()
         await asyncio.sleep(SWEEPER_INTERVAL_SECONDS)
+        sweep_count += 1
+        # Run corpus scheduler every SWEEPER_INTERVAL
         await _schedule_corpus()
+        # Run export scheduler weekly (every EXPORT_INTERVAL / SWEEPER_INTERVAL sweeps)
+        export_count += SWEEPER_INTERVAL_SECONDS
+        if export_count >= EXPORT_INTERVAL_SECONDS:
+            export_count = 0
+            await _schedule_export()
         await asyncio.sleep(SCHEDULER_INTERVAL_SECONDS - SWEEPER_INTERVAL_SECONDS)
 
 
@@ -128,6 +147,7 @@ app.include_router(workers.router, prefix="/api/v1", tags=["workers"])
 app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
 app.include_router(embed_cache.router, prefix="/api/v1", tags=["embed_cache"])
 app.include_router(system.router, prefix="/api/v1", tags=["system"])
+app.include_router(export.router, prefix="/api/v1", tags=["export"])
 
 
 # --- OpenAPI patch: global security so Swagger "Authorize" button appears ----

@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -20,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 import { useAlerts } from "@/lib/hooks";
+import { ExportPanel } from "@/components/layout/export-panel";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -80,6 +82,8 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      <ExportPanel />
 
       <div className="px-3 py-3 border-t border-zinc-200 dark:border-zinc-800 space-y-2">
         <Link

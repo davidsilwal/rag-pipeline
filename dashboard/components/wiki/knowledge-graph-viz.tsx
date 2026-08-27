@@ -117,13 +117,14 @@ export function KnowledgeGraphViz({ entities, relationships, communities }: Prop
 
     const links: GraphLink[] = relationships
       .filter((r) => {
+        if (typeof r.source !== "string" || typeof r.target !== "string") return false;
         const sid = nameToId.get(r.source.toLowerCase());
         const tid = nameToId.get(r.target.toLowerCase());
         return sid && tid;
       })
       .map((r) => ({
-        source: nameToId.get(r.source.toLowerCase())!,
-        target: nameToId.get(r.target.toLowerCase())!,
+        source: nameToId.get(String(r.source).toLowerCase())!,
+        target: nameToId.get(String(r.target).toLowerCase())!,
         relationship_type: r.relationship_type,
         description: r.description,
         weight: r.weight,
@@ -241,16 +242,17 @@ export function KnowledgeGraphViz({ entities, relationships, communities }: Prop
     if (!selectedEntity) return [];
     return relationships.filter(
       (r) =>
-        r.source.toLowerCase() === selectedEntity.name.toLowerCase() ||
-        r.target.toLowerCase() === selectedEntity.name.toLowerCase(),
+        typeof r.source === "string" && typeof r.target === "string" &&
+        (r.source.toLowerCase() === selectedEntity.name.toLowerCase() ||
+         r.target.toLowerCase() === selectedEntity.name.toLowerCase()),
     );
   }, [relationships, selectedEntity]);
 
   const selectedCommunities = useMemo(() => {
     if (!selectedEntity) return [];
     return communities.filter((c) =>
-      c.member_entities.some(
-        (m) => m.toLowerCase() === selectedEntity.name.toLowerCase(),
+      (c.member_entities ?? []).some(
+        (m) => typeof m === "string" && m.toLowerCase() === selectedEntity.name.toLowerCase(),
       ),
     );
   }, [communities, selectedEntity]);
@@ -341,12 +343,14 @@ export function KnowledgeGraphViz({ entities, relationships, communities }: Prop
               </p>
               <ul className="space-y-1.5">
                 {selectedRelationships.map((r) => {
+                  const src = typeof r.source === "string" ? r.source : "";
+                  const tgt = typeof r.target === "string" ? r.target : "";
                   const other =
-                    r.source.toLowerCase() === selectedEntity.name.toLowerCase()
-                      ? r.target
-                      : r.source;
+                    src.toLowerCase() === selectedEntity.name.toLowerCase()
+                      ? tgt
+                      : src;
                   const direction =
-                    r.source.toLowerCase() === selectedEntity.name.toLowerCase()
+                    src.toLowerCase() === selectedEntity.name.toLowerCase()
                       ? "→"
                       : "←";
                   return (
@@ -392,7 +396,7 @@ export function KnowledgeGraphViz({ entities, relationships, communities }: Prop
                         <span
                           key={m}
                           className={`rounded px-1 py-0.5 text-[9px] ${
-                            m.toLowerCase() === selectedEntity.name.toLowerCase()
+                            typeof m === "string" && m.toLowerCase() === selectedEntity.name.toLowerCase()
                               ? "bg-indigo-100 font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
                               : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
                           }`}

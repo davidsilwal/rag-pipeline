@@ -57,22 +57,23 @@ export function EntityDetailDrawer({
 
   const entityRels = relationships.filter(
     (r) =>
-      r.source.toLowerCase() === entity.name.toLowerCase() ||
-      r.target.toLowerCase() === entity.name.toLowerCase(),
+      typeof r.source === "string" && typeof r.target === "string" &&
+      (r.source.toLowerCase() === entity.name.toLowerCase() ||
+       r.target.toLowerCase() === entity.name.toLowerCase()),
   );
 
   const entityCommunities = communities.filter((c) =>
-    c.member_entities.some(
-      (m) => m.toLowerCase() === entity.name.toLowerCase(),
+    (c.member_entities ?? []).some(
+      (m) => typeof m === "string" && m.toLowerCase() === entity.name.toLowerCase(),
     ),
   );
 
   // Group relationships by type
   const outgoing = entityRels.filter(
-    (r) => r.source.toLowerCase() === entity.name.toLowerCase(),
+    (r) => typeof r.source === "string" && r.source.toLowerCase() === entity.name.toLowerCase(),
   );
   const incoming = entityRels.filter(
-    (r) => r.target.toLowerCase() === entity.name.toLowerCase(),
+    (r) => typeof r.target === "string" && r.target.toLowerCase() === entity.name.toLowerCase(),
   );
 
   return (
@@ -237,7 +238,7 @@ export function EntityDetailDrawer({
                         <span
                           key={m}
                           className={`rounded px-1.5 py-0.5 text-[10px] ${
-                            m.toLowerCase() === entity.name.toLowerCase()
+                            typeof m === "string" && m.toLowerCase() === entity.name.toLowerCase()
                               ? "bg-indigo-100 font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
                               : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
                           }`}

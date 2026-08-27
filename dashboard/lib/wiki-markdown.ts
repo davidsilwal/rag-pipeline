@@ -26,7 +26,7 @@ function isSafeUrl(href: string): boolean {
 }
 
 export function slugifyHeading(text: string): string {
-  const slug = text
+  const slug = String(text ?? "")
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")

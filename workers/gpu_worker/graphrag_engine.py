@@ -73,7 +73,6 @@ def _api_key() -> str:
         os.getenv("LITELLM_API_KEY")
         or os.getenv("OPENAI_API_KEY")
         or os.getenv("LOCAL_LLM_API_KEY")
-        or "__REDACTED_LITELLM_KEY__"
     )
 
 
@@ -216,31 +215,19 @@ def _parse_response(raw: str) -> dict | None:
         if isinstance(candidate, dict) and ("entities" in candidate or "relationships" in candidate):
             return candidate
 
-    # 4. Handle common model output: {"{"entities" (JSON wrapped in a string)
-    #    Strip the outer wrapper.
-    if text.startswith('{"{'):
-        inner = text[1:-1]  # strip outer { and }
-        if inner.startswith('"') and inner.endswith('"'):
-            inner = inner[1:-1]  # strip quotes
-        inner = inner.replace('\"', '"').replace('\n', '\n')
-        try:
-            data = json.loads(inner)
-            if isinstance(data, dict) and ('entities' in data or 'relationships' in data):
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # 5. Brute-force: find first { and last } and try
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            data = json.loads(text[start:end + 1])
-            if isinstance(data, dict):
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
+    # 4. Handle common model output: {\"{\"entities\" (JSON prefixed with extra chars)
+    #    Try progressively: from second { onward, find a valid JSON object.
+    for idx in range(len(text)):
+        if text[idx] == '{':
+            # Try parsing from this { to the last }
+            end_idx = text.rfind('}', idx)
+            if end_idx > idx:
+                try:
+                    data = json.loads(text[idx:end_idx + 1])
+                    if isinstance(data, dict) and ('entities' in data or 'relationships' in data):
+                        return data
+                except (json.JSONDecodeError, ValueError):
+                    pass
     return None
 
 

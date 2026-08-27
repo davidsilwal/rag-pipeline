@@ -52,10 +52,7 @@ def _api_key() -> str:
         os.getenv("LITELLM_API_KEY")
         or os.getenv("OPENAI_API_KEY")
         or os.getenv("LOCAL_LLM_API_KEY")
-        or "__REDACTED_LITELLM_KEY__"
     )
-
-
 def _aliases() -> list[str]:
     base = os.getenv("LOCAL_LLM_MODEL", "free")
     alts_raw = os.getenv("LOCAL_LLM_FALLBACK_ALIASES", "free-auto")

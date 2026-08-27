@@ -130,7 +130,7 @@ services:
       # name. If the proxy is moved to a different host, override this
       # with `LOCAL_LLM_API_BASE=http://<host>:<port>/v1`.
       LOCAL_LLM_API_BASE: http://litellm-proxy:4000/v1
-      LITELLM_API_KEY: __REDACTED_LITELLM_KEY__
+      LITELLM_API_KEY: ${LITELLM_API_KEY}
       LOCAL_LLM_MAX_TOKENS: "8192"
       GRAPHRAG_MODELS: openrouter/nemotron-nano-omni,openrouter/nemotron-super,free
       LOCAL_LLM_MAX_ATTEMPTS: "8"

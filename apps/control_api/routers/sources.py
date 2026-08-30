@@ -165,47 +165,103 @@ async def delete_source_by_drive_item(drive_item_id: str, _tok: str = Depends(re
     return DeleteResponse(status="deleted", source_id=source_id, deleted=True)
 
 
+async def _list_sources_rows(conn, status: str | None, limit: int):
+    query = (
+        select(
+            Source.source_id,
+            Source.drive_item_id,
+            Source.drive_id,
+            Source.source_type,
+            Source.source_url,
+            Source.file_path,
+            Source.file_name,
+            Source.mime_type,
+            Source.size_bytes,
+            Source.sha256_hash,
+            Source.status,
+            Source.source_metadata,
+        ).limit(limit)
+    )
+    if status:
+        query = query.where(Source.status == status)
+    result = await conn.execute(query)
+    return result.mappings().all()
+
+
+async def _fetch_clone_statuses(conn, drive_item_ids: list[str]) -> dict[str, dict]:
+    """Map github repo-marker source id → latest clone task info.
+
+    Returns {source_id: {task_status, source_status, clone_status}}. Repo rows
+    are identified by their ``github-repo:{scope_id}`` drive_item_id, and the
+    corresponding ``clone`` task is keyed by the same scope_id.
+    """
+    repo_keys = {d for d in drive_item_ids if isinstance(d, str) and d.startswith("github-repo:")}
+    if not repo_keys:
+        return {}
+    scope_ids = [k[len("github-repo:"):] for k in repo_keys]
+    placeholders = ",".join(f":s{i}" for i in range(len(scope_ids)))
+    params = {f"s{i}": s for i, s in enumerate(scope_ids)}
+    rows = (await conn.execute(
+        text(f"""
+            SELECT DISTINCT ON (scope_id) scope_id, status, created_at, completed_at, attempts
+            FROM task_queue
+            WHERE stage = 'clone' AND scope_id IN ({placeholders})
+            ORDER BY scope_id, created_at DESC
+        """),
+        params,
+    )).mappings().all()
+
+    # task_status → displayed source status.
+    status_map = {
+        "queued": "queued",
+        "claimed": "cloning",
+        "running": "cloning",
+        "succeeded": "indexed",
+        "failed": "error",
+        "dead_letter": "error",
+    }
+    out: dict[str, dict] = {}
+    for r in rows:
+        sid = f"github-repo:{r['scope_id']}"
+        out[sid] = {
+            "task_status": r["status"],
+            "source_status": status_map.get(r["status"], "queued"),
+            "clone_status": r["status"],
+        }
+    return out
+
+
 @router.get("/", summary="List sources by status")
 async def list_sources(status: str | None = None, limit: int = 50):
     engine = get_engine()
     async with engine.connect() as conn:
-        query = (
-            select(
-                Source.source_id,
-                Source.drive_item_id,
-                Source.drive_id,
-                Source.source_type,
-                Source.source_url,
-                Source.file_path,
-                Source.file_name,
-                Source.mime_type,
-                Source.size_bytes,
-                Source.sha256_hash,
-                Source.status,
-                Source.source_metadata,
-            ).limit(limit)
-        )
-        if status:
-            query = query.where(Source.status == status)
-        result = await conn.execute(query)
-        rows = result.mappings().all()
-    return [
-        {
+        rows = await _list_sources_rows(conn, status, limit)
+        drive_ids = [r["drive_item_id"] for r in rows]
+        clone_map = await _fetch_clone_statuses(conn, drive_ids)
+    out = []
+    for row in rows:
+        did = row["drive_item_id"]
+        meta = dict(row["source_metadata"] or {})
+        source_status = row["status"]
+        c = clone_map.get(did)
+        if c:
+            source_status = c["source_status"]
+            meta["clone_status"] = c["clone_status"]
+        out.append({
             "source_id": str(row["source_id"]),
-            "drive_item_id": row["drive_item_id"],
+            "drive_item_id": did,
             "drive_id": row["drive_id"],
             "file_path": row["file_path"],
             "file_name": row["file_name"],
             "mime_type": row["mime_type"],
             "size_bytes": row["size_bytes"],
             "sha256_hash": row["sha256_hash"],
-            "status": row["status"],
+            "status": source_status,
             "source_type": row.get("source_type") or "local",
             "source_url": row.get("source_url"),
-            "source_metadata": row["source_metadata"] or {},
-        }
-        for row in rows
-    ]
+            "source_metadata": meta,
+        })
+    return out
 
 
 @router.get("/{drive_item_id}", summary="Get source by OneDrive item ID")
@@ -250,9 +306,20 @@ async def get_source_by_id(source_id: uuid.UUID):
             {"id": source_id},
         )
         row = result.mappings().first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Source not found")
-    return dict(row)
+        if not row:
+            raise HTTPException(status_code=404, detail="Source not found")
+        detail = dict(row)
+    # Overlay live clone status for github repo-marker rows.
+    drive_id_key = row["drive_item_id"]
+    if isinstance(drive_id_key, str) and drive_id_key.startswith("github-repo:"):
+        clone_map = await _fetch_clone_statuses(conn, [drive_id_key])
+        c = clone_map.get(drive_id_key)
+        if c:
+            meta = dict(detail["source_metadata"] or {})
+            meta["clone_status"] = c["clone_status"]
+            detail["status"] = c["source_status"]
+            detail["source_metadata"] = meta
+    return detail
 
 
 @router.post("/{source_id}/blob", summary="Store raw source bytes")

@@ -10,13 +10,17 @@ import {
   Network,
   GitBranch,
   Search,
+  MessagesSquare,
   ListTodo,
   Users,
   History,
   Activity,
+  Braces,
   LogOut,
   Settings,
   Play,
+  Edit,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
@@ -30,11 +34,15 @@ const NAV_ITEMS = [
   { href: "/wiki", label: "Wiki", icon: BookOpen },
   { href: "/wiki/graph", label: "Graph", icon: Network },
   { href: "/knowledge-graph", label: "Knowledge", icon: GitBranch },
+  { href: "/dedup", label: "Dedup", icon: Edit },
+  { href: "/incremental", label: "Incremental", icon: RefreshCw },
+  { href: "/ask", label: "Ask", icon: MessagesSquare },
   { href: "/search", label: "Search", icon: Search },
   { href: "/tasks", label: "Tasks", icon: ListTodo },
   { href: "/workers", label: "Workers", icon: Users },
   { href: "/jobs", label: "Jobs", icon: History },
   { href: "/system", label: "System", icon: Activity },
+  { href: "/clusters", label: "Clusters", icon: Braces },
 ];
 
 export function Sidebar() {

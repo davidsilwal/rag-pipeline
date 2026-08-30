@@ -8,7 +8,7 @@ them as 1024-d. Sparse BM25-style weights ride along as JSON.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -48,6 +48,50 @@ async def upsert_embedding(payload: EmbeddingUpsertRequest, _token=None):
             },
         )
     return {"status": "upserted", "content_hash": payload.content_hash}
+
+
+class BatchEmbeddingUpsertRequest(BaseModel):
+    rows: list[EmbeddingUpsertRequest]
+
+
+@router.post("/batch", summary="Bulk upsert embeddings (200+ per call)")
+async def batch_upsert_embeddings(payload: BatchEmbeddingUpsertRequest, _token=None):
+    engine = get_engine()
+    async with engine.begin() as conn:
+        for row in payload.rows:
+            vec = "[" + ",".join(repr(float(x)) for x in row.dense_vector) + "]"
+            await conn.execute(
+                text("""
+                    INSERT INTO embed_cache (content_hash, model_id, dense_vector, sparse_weights)
+                    VALUES (:hash, :model, CAST(:vec AS vector), CAST(:sparse AS jsonb))
+                    ON CONFLICT (content_hash) DO UPDATE SET
+                        model_id = EXCLUDED.model_id,
+                        dense_vector = EXCLUDED.dense_vector,
+                        sparse_weights = EXCLUDED.sparse_weights,
+                        created_at = now()
+                """),
+                {
+                    "hash": row.content_hash,
+                    "model": row.model_id,
+                    "vec": vec,
+                    "sparse": _json_dumps(row.sparse_weights or {}),
+                },
+            )
+    return {"status": "upserted", "count": len(payload.rows)}
+
+
+@router.get("/check", summary="Check which content hashes are already cached")
+async def check_cached_hashes(hashes: list[str] = Query(...), _token=None):
+    """Return the subset of hashes that exist in embed_cache."""
+    engine = get_engine()
+    if not hashes:
+        return []
+    async with engine.connect() as conn:
+        rows = (await conn.execute(
+            text("SELECT content_hash FROM embed_cache WHERE content_hash = ANY(:hashes)"),
+            {"hashes": hashes},
+        )).fetchall()
+    return [r[0] for r in rows]
 
 
 def _json_dumps(obj) -> str:

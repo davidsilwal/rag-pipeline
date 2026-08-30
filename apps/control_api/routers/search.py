@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from database import get_engine
 from pydantic import BaseModel
+from services.fts import fts_query
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -33,7 +34,7 @@ async def fts_search(payload: FTSQuery):
             ORDER BY rank DESC
             LIMIT :k
         """)
-        result = await conn.execute(sql, {"q": payload.query, "k": payload.top_k})
+        result = await conn.execute(sql, {"q": fts_query(payload.query), "k": payload.top_k})
         rows = result.mappings().all()
         return [
             {
@@ -57,7 +58,7 @@ async def hybrid_search(payload: HybridQuery):
             FROM wiki_chunks
             WHERE fts_vector @@ websearch_to_tsquery('simple', :q)
         """)
-        fts_result = await conn.execute(fts_sql, {"q": payload.query_text})
+        fts_result = await conn.execute(fts_sql, {"q": fts_query(payload.query_text)})
         fts_rows = fts_result.mappings().all()
 
         # Dense vector part

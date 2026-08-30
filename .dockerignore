@@ -9,7 +9,10 @@ dist
 build
 *.egg-info
 .venv
-node_modules
+**/node_modules
+**/.next
+**/.turbo
+**/tsconfig.tsbuildinfo
 .DS_Store
 Thumbs.db
 *.md

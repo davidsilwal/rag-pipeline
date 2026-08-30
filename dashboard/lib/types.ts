@@ -123,6 +123,114 @@ export interface WikiGraphResponse {
   links: WikiGraphLink[];
 }
 
+// ── Export & Clustering ─────────────────────────────────────────────────────────
+export interface Cluster {
+  cluster_id: string;
+  topic_name: string;
+  page_count: number;
+  entity_count: number;
+  relationship_count: number;
+  source_unit_count: number;
+  keywords: string[];
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ClusterExportOptions {
+  format: 'markdown' | 'json' | 'graphml' | 'zip' | 'context-pack';
+  include_neighbors?: boolean;
+  max_pages?: number;
+  max_entities?: number;
+}
+
+export interface DedupPendingPair {
+  pair_id: string;
+  kept_unit_id: string;
+  suppressed_unit_id: string;
+  similarity_score: number;
+  method: "exact_sha256" | "minhash_lsh" | string;
+  created_at?: string | null;
+  kept_source_id?: string | null;
+  kept_source_name?: string | null;
+  kept_source_path?: string | null;
+  kept_text_preview?: string | null;
+  suppressed_source_id?: string | null;
+  suppressed_source_name?: string | null;
+  suppressed_source_path?: string | null;
+  suppressed_text_preview?: string | null;
+}
+
+export interface DedupReview {
+  pair_id: string;
+  source_a_id: string;
+  source_b_id: string;
+  similarity_score: number;
+  decision: 'keep' | 'suppress' | 'merge' | 'skip';
+  reviewer: string | null;
+  reviewed_at?: string | null;
+  notes: string | null;
+  created_at?: string | null;
+}
+
+export interface DedupReviewRequest {
+  decision: 'keep' | 'suppress' | 'merge' | 'skip';
+  reviewer: string;
+  notes?: string;
+}
+
+export interface DedupStats {
+  total_pairs: number;
+  pending_review: number;
+  keep: number;
+  suppress: number;
+  merge: number;
+  skip: number;
+}
+
+export interface IncrementalSource {
+  source_id: string;
+  source_name: string;
+  source_version: number;
+  last_processed_at: string | null;
+  last_processed_by: string | null;
+  status: string;
+  needs_incremental: boolean;
+}
+
+export interface IncrementalPlan {
+  source_id: string;
+  file_path: string;
+  source_version: number;
+  last_processed_at: string | null;
+  current_modified_at: string;
+  is_stale: boolean;
+  total_units: number;
+  pending_units: number;
+  recommendation: string;
+  stages?: {
+    embed: { needed: boolean; unit_count: number };
+    dedupe: { needed: boolean; unit_count: number };
+    extract: { needed: boolean; note?: string };
+    cluster: { needed: boolean; affected_cluster_count: number; note?: string };
+  };
+  total_work?: number;
+}
+
+export interface IncrementalUpdateRequest {
+  processed_by: string;
+  reembed: boolean;
+  rededupe: boolean;
+  reextract: boolean;
+  recluster: boolean;
+}
+
+export interface IncrementalUpdateResult {
+  source_id: string;
+  stages_executed: { stage: string; status: string; units_processed?: number }[];
+  stages_skipped: string[];
+  version_update: { new_version: number; last_processed_at: string };
+}
+
 // ── GraphRAG ─────────────────────────────────────────────────────────────────
 export interface GraphragEntity {
   entity_id: string;
@@ -173,6 +281,28 @@ export interface SearchResult {
   content?: string;
   rank?: number;
   rrf_score?: number;
+}
+
+export interface AskSource {
+  chunk_id: string;
+  file_path?: string;
+  heading_path?: string[];
+  content?: string;
+  score?: number;
+}
+
+export interface AskResult {
+  question: string;
+  answer: string | null;
+  sources: AskSource[];
+  llm_error?: string | null;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  sources?: AskSource[];
+  error?: boolean;
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────────
@@ -312,6 +442,8 @@ export const STATUS_COLORS: Record<string, string> = {
   quarantine: "bg-amber-100 text-amber-700",
   error: "bg-red-100 text-red-700",
   queued: "bg-slate-100 text-slate-700",
+  cloning: "bg-violet-100 text-violet-700",
+  cloned: "bg-emerald-100 text-emerald-700",
   claimed: "bg-blue-100 text-blue-700",
   running: "bg-indigo-100 text-indigo-700",
   succeeded: "bg-emerald-100 text-emerald-700",

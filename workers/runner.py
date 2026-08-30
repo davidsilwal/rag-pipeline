@@ -25,6 +25,7 @@ import logging
 import os
 import pathlib
 import platform
+import re
 import signal
 import socket
 
@@ -36,7 +37,7 @@ log = logging.getLogger("worker.runner")
 # Config (plan §9 env table)
 # ---------------------------------------------------------------------------
 
-DEFAULT_STAGES = ["discover", "extract", "chunk", "embed", "dedup",
+DEFAULT_STAGES = ["discover", "clone", "extract", "chunk", "embed", "dedup",
                   "cluster", "consensus", "graphrag", "compile"]
 
 
@@ -52,9 +53,13 @@ def load_config() -> dict:
         # auto | bgem3 | fallback (plan §7.1 EMBED_ALLOW_CPU: force the cheap,
         # deterministic CPU embedder on memory-constrained hosts).
         "embed_backend": os.getenv("EMBED_BACKEND", "auto"),
-        "embed_batch_size": int(os.getenv("EMBED_BATCH_SIZE", "32")),
+        "embed_batch_size": int(os.getenv("EMBED_BATCH_SIZE", "128")),
+        # 0 = embed the whole corpus; positive N = embed at most N unembedded
+        # units then stop, so a CPU-only worker can produce a representative
+        # slice (enough for dedup/cluster/compile) without running for weeks.
+        "embed_max_units": int(os.getenv("EMBED_MAX_UNITS", "0")),
         "embedding_model": os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3"),
-        "max_concurrent": int(os.getenv("MAX_CONCURRENT_TASKS", "1")),
+        "max_concurrent": int(os.getenv("MAX_CONCURRENT_TASKS", "8")),
         "poll_interval": int(os.getenv("TASK_POLL_INTERVAL", "15")),
         "lease_ttl": int(os.getenv("TASK_LEASE_TTL", "600")),
         "long_poll": os.getenv("LONG_POLL", "1") in {"1", "true", "True"},
@@ -141,16 +146,25 @@ class ApiClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, **kw):
-        resp = await self._client.request(method, f"{self.base}{path}", **kw)
-        if resp.status_code >= 400:
-            raise RuntimeError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}")
-        if not resp.content:
-            return None
-        try:
-            return resp.json()
-        except Exception:
-            return resp.content
+    async def _request(self, method: str, path: str, retries: int = 3, **kw):
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                resp = await self._client.request(method, f"{self.base}{path}", **kw)
+                if resp.status_code >= 400:
+                    raise RuntimeError(f"{method} {path} -> {resp.status_code}: {resp.text[:300]}")
+                if not resp.content:
+                    return None
+                try:
+                    return resp.json()
+                except Exception:
+                    return resp.content
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout) as e:
+                last_exc = e
+                if attempt < retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise
 
     async def get(self, path: str, **kw):
         return await self._request("GET", path, **kw)
@@ -204,6 +218,88 @@ async def _extract_text(raw: bytes, mime: str) -> str:
 async def _hash_text(text: str) -> str:
     import hashlib
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+async def _clone_repo(url: str, dest: pathlib.Path) -> None:
+    """Shallow-clone a public git repo. No-op if the checkout already exists
+    (git refuses to clone into a non-empty dir, which also gives idempotency)."""
+    if (dest / ".git").exists():
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    proc = await asyncio.create_subprocess_exec(
+        "git", "clone", "--depth", "1", "--single-branch", url, str(dest),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"git clone failed ({proc.returncode}): {stderr.decode('utf-8', errors='replace')[:500]}")
+
+
+def _repo_slug(url: str) -> str:
+    """Derive a filesystem-safe dir name from a repo URL."""
+    stem = url.rstrip("/").rstrip(".git")
+    slug = stem.split("/")[-1] if "/" in stem else stem
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", slug)[:80] or hashlib_sha256(url)[:12]
+
+
+def hashlib_sha256(s: str) -> str:
+    import hashlib
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+async def handle_clone(api: ApiClient, cfg: dict, task: dict) -> dict:
+    """Clone a public git repo into the ingest root and register its files.
+
+    Reads the repo URL from the task payload, shallow-clones into
+    ``<discover_root>/repos/<slug>``, then registers every discovered file
+    as a ``github`` source (blob-stored + extract queued) — reusing the same
+    manifest path as ``handle_discover`` so the pipeline proceeds unchanged.
+    Clones that already exist on disk are re-used (idempotent).
+    """
+    url = ((task.get("payload") or {}).get("url") or "").strip()
+    if not url:
+        raise RuntimeError("clone task missing payload.url")
+    root = cfg["discover_root"]
+    if not root:
+        return {"registered": 0, "note": "no discover_root set; cannot clone"}
+    root_path = pathlib.Path(root)
+    dest = root_path / "repos" / _repo_slug(url)
+
+    await _clone_repo(url, dest)
+
+    from workers.gpu_worker.discovery import discover
+    manifest = discover(dest)
+    registered = 0
+    skipped = 0
+    for item in manifest:
+        sha = item["sha256_hash"]
+        if await api.head(f"/sources/by-hash/{sha}"):
+            skipped += 1
+            continue
+        reg = await api.post("/sources/register", {
+            "drive_item_id": f"github:{sha}",
+            "drive_id": "github",
+            "source_type": "github",
+            "source_url": url,
+            "file_path": str(item["file_path"]),
+            "file_name": item["file_name"],
+            "mime_type": item["mime_type"],
+            "size_bytes": item["size_bytes"],
+            "sha256_hash": sha,
+            "status": "discovered",
+            "source_metadata": {
+                "github_url": url,
+                "discovery": (item.get("source_metadata") or {}).get("discovery"),
+            },
+        })
+        sid = (((reg or {}).get("source_id")) if isinstance(reg, dict) else None) or sha
+        try:
+            raw = (dest / item["file_path"]).read_bytes()
+            await api.post_bytes(f"/sources/{sid}/blob", raw, item["mime_type"] or "application/octet-stream")
+        except Exception:
+            pass
+        registered += 1
+    return {"registered": registered, "skipped_known": skipped, "repo": url, "clone_dir": str(dest)}
 
 
 async def handle_discover(api: ApiClient, cfg: dict, task: dict) -> dict:
@@ -323,33 +419,161 @@ async def handle_chunk(api: ApiClient, cfg: dict, task: dict) -> dict:
 
 
 async def handle_embed(api: ApiClient, cfg: dict, task: dict) -> dict:
-    source_id = task["scope_id"]
-    units = await _fetch_units(api, source_id)
-    texts = [u.get("clean_text", "") for u in units if u.get("clean_text")]
-    if not texts:
-        return {"embedded": 0, "units": 0}
+    """Embed units. Supports per-source and corpus-wide modes.
 
+    Corpus mode (scope_id='corpus' or starts with 'corpus'):
+      Fetches ALL unembedded units via /units/unembedded and embeds them
+      in one big batch, eliminating per-source HTTP overhead.
+
+    Per-source mode:
+      Embeds units for a specific source_id.
+    """
+    source_id = task["scope_id"]
     use_gpu = cfg["embed_device"] == "cuda" or (
         cfg["embed_device"] == "auto" and _gpu_caps().get("present")
     )
     embedder = _get_embedder(cfg, use_gpu)
-    dense, sparse = embedder.encode(texts, batch_size=cfg["embed_batch_size"],
-                                    return_dense=True, return_sparse=True)
-    written = 0
-    for u, d, s in zip(units, dense, sparse):
-        if not u.get("clean_text"):
-            continue
-        await api.post("/embed_cache", {
+    try:
+        import torch
+        torch.set_num_threads(max(1, (os.cpu_count() or 4) * 3 // 4))
+    except Exception:
+        pass
+
+    is_corpus = (not source_id or source_id == "corpus" or source_id.startswith("corpus"))
+    EMBED_BATCH = cfg["embed_batch_size"]  # 128
+    sem = _get_embed_semaphore()
+    total_embedded = 0
+    total_fetched = 0
+
+    if is_corpus:
+        # --- Corpus-wide mode: fetch unembedded units in pages and embed a
+        # representative slice (bounded by embed_max_units when set) ---
+        OFFSET = 0
+        PAGE_SIZE = 5000
+        cap = cfg.get("embed_max_units") if cfg.get("embed_max_units") is not None else 0
+        while True:
+            # Honour the cap across pages.
+            if cap and total_fetched >= cap:
+                log.info("corpus embed reached EMBED_MAX_UNITS cap=%d (fetched=%d); stopping",
+                         cap, total_fetched)
+                break
+            fetch_limit = min(PAGE_SIZE, cap - total_fetched) if cap else PAGE_SIZE
+            data = await api.get("/units/unembedded", params={"limit": fetch_limit, "offset": OFFSET})
+            if not isinstance(data, dict):
+                break
+            units = data.get("units", [])
+            remaining = data.get("total", 0)
+            if not units:
+                break
+            total_fetched += len(units)
+            texts = [u["clean_text"] for u in units if u.get("clean_text")]
+            if not texts:
+                OFFSET += PAGE_SIZE
+                continue
+            # Encode in batches
+            all_dense, all_sparse = [], []
+            for i in range(0, len(texts), EMBED_BATCH):
+                batch_texts = texts[i:i + EMBED_BATCH]
+                async with sem:
+                    dense, sparse = await asyncio.to_thread(
+                        embedder.encode, batch_texts,
+                        batch_size=EMBED_BATCH,
+                        return_dense=True, return_sparse=True,
+                    )
+                all_dense.extend(dense)
+                all_sparse.extend(sparse)
+                log.info("corpus embed batch %d-%d of %d (offset=%d, remaining=%d)",
+                         i, min(i + EMBED_BATCH, len(texts)), len(texts), OFFSET, remaining)
+            # Post embeddings in bulk (200/request via /embed_cache/batch)
+            written = await _post_embed_batch(api, cfg, zip(units, all_dense, all_sparse))
+            total_embedded += written
+            log.info("corpus embed page offset=%d: embedded %d/%d (remaining=%d)",
+                     OFFSET, written, len(units), remaining - len(units))
+            if remaining <= PAGE_SIZE:
+                break  # Last page
+            OFFSET += PAGE_SIZE
+        return {"embedded": total_embedded, "total_fetched": total_fetched,
+                "device": "cuda" if use_gpu else "cpu", "mode": "corpus"}
+
+    else:
+        # --- Per-source mode ---
+        units = await _fetch_units(api, source_id)
+        units_with_text = [u for u in units if u.get("clean_text")]
+        if not units_with_text:
+            return {"embedded": 0, "units": 0, "device": "cuda" if use_gpu else "cpu"}
+        hashes = [u["content_hash"] for u in units_with_text]
+        cached_hashes = set()
+        BATCH_CHECK = 500
+        for i in range(0, len(hashes), BATCH_CHECK):
+            batch = hashes[i:i + BATCH_CHECK]
+            try:
+                result = await api.get("/embed_cache/check", params={"hashes": batch})
+                if isinstance(result, list):
+                    cached_hashes.update(result)
+            except Exception:
+                pass
+        uncached = [u for u in units_with_text if u["content_hash"] not in cached_hashes]
+        if not uncached:
+            return {"embedded": 0, "units": len(units), "skipped_cached": len(units_with_text),
+                    "device": "cuda" if use_gpu else "cpu"}
+        texts = [u["clean_text"] for u in uncached]
+        all_dense, all_sparse = [], []
+        for i in range(0, len(texts), EMBED_BATCH):
+            batch_texts = texts[i:i + EMBED_BATCH]
+            async with sem:
+                dense, sparse = await asyncio.to_thread(
+                    embedder.encode, batch_texts,
+                    batch_size=EMBED_BATCH,
+                    return_dense=True, return_sparse=True,
+                )
+            all_dense.extend(dense)
+            all_sparse.extend(sparse)
+        written = await _post_embed_batch(api, cfg, zip(uncached, all_dense, all_sparse))
+        return {"embedded": written, "units": len(units), "skipped_cached": len(units_with_text) - len(uncached),
+                "device": "cuda" if use_gpu else "cpu"}
+
+
+async def _post_embed_batch(api, cfg: dict, rows) -> int:
+    """POST embeddings to /embed_cache/batch in chunks of 200.
+
+    Replaces per-unit HTTP posts (one round-trip per unit) with bulk calls —
+    ~25x fewer requests for a 5000-unit page, which matters a lot when the
+    encode itself is the slow step on CPU.
+    """
+    model_id = cfg["embedding_model"]
+    items = [
+        {
             "content_hash": u["content_hash"],
-            "model_id": cfg["embedding_model"],
+            "model_id": model_id,
             "dense_vector": _to_list(d),
             "sparse_weights": _to_dict(s),
-        })
-        written += 1
-    return {"embedded": written, "units": len(units), "device": "cuda" if use_gpu else "cpu"}
+        }
+        for u, d, s in rows
+        if u.get("clean_text")
+    ]
+    written = 0
+    CHUNK = 200
+    for i in range(0, len(items), CHUNK):
+        chunk = items[i:i + CHUNK]
+        try:
+            await api.post("/embed_cache/batch", {"rows": chunk})
+            written += len(chunk)
+        except Exception as e:
+            log.warning("embed_cache batch post failed (%d rows): %s", len(chunk), e)
+    return written
 
 
 _embedder_cache: dict = {}
+
+# Limit concurrent CPU-bound embed operations to avoid OOM.
+# On 6-core CPU, max 2 concurrent encodes fits in 5GB RAM.
+_EMBED_SEMAPHORE: asyncio.Semaphore | None = None
+
+def _get_embed_semaphore() -> asyncio.Semaphore:
+    global _EMBED_SEMAPHORE
+    if _EMBED_SEMAPHORE is None:
+        _EMBED_SEMAPHORE = asyncio.Semaphore(2)
+    return _EMBED_SEMAPHORE
 
 
 def _get_embedder(cfg: dict, use_gpu: bool):
@@ -420,15 +644,17 @@ async def handle_dedup(api: ApiClient, cfg: dict, task: dict) -> dict:
 
 
 async def handle_cluster(api: ApiClient, cfg: dict, task: dict) -> dict:
-    from workers.gpu_worker.clustering import run_clustering
+    from workers.gpu_worker.clustering import run_clustering, persist_clusters
     clusters = await run_clustering(task["scope_id"])
-    return {"clusters": len(clusters)}
+    written = await persist_clusters(clusters)
+    return {"clusters": len(clusters), "persisted": written}
 
 
 async def handle_consensus(api: ApiClient, cfg: dict, task: dict) -> dict:
-    from workers.gpu_worker.consensus import compute_consensus
+    from workers.gpu_worker.consensus import compute_consensus, persist_consensus
     results = await compute_consensus(task["scope_id"])
-    return {"units_scored": len(results)}
+    written = await persist_consensus(results)
+    return {"units_scored": len(results), "consensus_rows": written}
 
 
 async def handle_graphrag(api: ApiClient, cfg: dict, task: dict) -> dict:
@@ -610,6 +836,7 @@ async def handle_compile(api: ApiClient, cfg: dict, task: dict) -> dict:
 
 
 STAGE_HANDLERS = {
+    "clone": handle_clone,
     "discover": handle_discover,
     "extract": handle_extract,
     "chunk": handle_chunk,
@@ -767,15 +994,6 @@ async def run_worker_forever(cfg: dict | None = None) -> None:
                 log.info("run ok stage=%s task=%s result=%s", stage, stage_task_id, result)
             except Exception as exc:
                 log.exception("run failed stage=%s task=%s err=%s", stage, stage_task_id, exc)
-                try:
-                    await api.post("/tasks/complete", {
-                        "task_id": stage_task_id,
-                        "status": "failed",
-                        "error": {"message": str(exc)},
-                        "worker_id": worker_id,
-                    })
-                except Exception:
-                    pass
 
 
 if __name__ == "__main__":

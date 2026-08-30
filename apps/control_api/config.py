@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     redis_url: str = Field("redis://redis:6379/0", env="REDIS_URL")
     api_token: str = Field(..., env="API_TOKEN")
     wiki_repo_path: str = Field("/var/data/wiki", env="WIKI_REPO_PATH")
+    ingest_root: str = Field("/var/data/ingest", env="INGEST_ROOT")
     ensure_tables: bool = Field(False, env="ENSURE_TABLES")
 
     # LiteLLM / Local LLM

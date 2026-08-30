@@ -61,6 +61,17 @@ services:
       REDIS_URL: redis://redis:6379/0
       API_TOKEN: ${API_TOKEN}
       WIKI_REPO_PATH: /var/data/wiki
+      # RAG /ask endpoint — reach the same LiteLLM gateway the worker uses.
+      LOCAL_LLM_API_BASE: ${LOCAL_LLM_API_BASE:-http://litellm-proxy:4000/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-free}
+      LOCAL_LLM_FALLBACK_ALIASES: ${LOCAL_LLM_FALLBACK_ALIASES:-free,free-auto,free-a,free-b,free-c,free-d,free-e,free-f,free-g,free-h,free-i,free-j,free-k}
+      LOCAL_LLM_MAX_TOKENS: "8192"
+      # Filesystem browse + server-path registration is confined to the ingest
+      # root. Bind-mount it so the operator can add files present on the host.
+      INGEST_ROOT: ${INGEST_ROOT:-/var/data/ingest}
+    volumes:
+      - ${INGEST_ROOT:-/var/data/ingest}:${INGEST_ROOT:-/var/data/ingest}
     ports:
       - "8000:8000"
     depends_on:
@@ -68,6 +79,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - default
+      - litellm-proxy_default
 
   dashboard:
     build:
@@ -111,7 +125,14 @@ services:
       # plain postgresql:// URL is required (asyncpg rejects +asyncpg scheme).
       DATABASE_URL: postgresql://postgres:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/knowledge_base
       REDIS_URL: redis://redis:6379/0
-      MAX_CONCURRENT_TASKS: "8"
+      MAX_CONCURRENT_TASKS: "4"
+      EMBED_BATCH_SIZE: "128"
+      # Embed only a representative slice of the corpus (CPU-only box has no
+      # GPU, so full 317k would take weeks). 0 = unlimited. Cluster/dedup run
+      # on whatever gets embedded.
+      EMBED_MAX_UNITS: ${EMBED_MAX_UNITS:-5000}
+      # Temporarily disable graphrag to let embed drain the 14K queue first.
+      STAGES_ENABLED: clone,discover,extract,chunk,embed,dedup,cluster,consensus,compile
       API_TOKEN: ${API_TOKEN}
       CONTROL_API_URL: http://control-api:8000/api/v1
       DOCKER_WORKER: "1"
@@ -121,7 +142,11 @@ services:
       AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
       ONEDRIVE_DRIVE_ID: ${ONEDRIVE_DRIVE_ID}
       ONEDRIVE_ROOT_FOLDER: /Enterprise_Knowledge_Base
-      LOCAL_SOURCE_DIR: /root/.okf/knowledge
+      # Clone/discover land in the shared ingest root — the same rw host dir
+      # the control-api server picker browses (INGEST_ROOT). Must be writable:
+      # /root/.okf is bind-mounted :ro, so cloning there failed with EROFS.
+      INGEST_ROOT: ${INGEST_ROOT:-/var/data/ingest}
+      LOCAL_SOURCE_DIR: ${INGEST_ROOT:-/var/data/ingest}
       LOCAL_LLM_MODEL: free
       # The litellm-proxy runs in a separate docker-compose project. The
       # worker's default network cannot reach `litellm-proxy` by DNS, so we
@@ -140,6 +165,7 @@ services:
       - ./policies:/app/policies
       - /root/repos:/root/repos:ro
       - /root/.okf:/root/.okf:ro
+      - ${INGEST_ROOT:-/var/data/ingest}:${INGEST_ROOT:-/var/data/ingest}
     depends_on:
       postgres:
         condition: service_healthy

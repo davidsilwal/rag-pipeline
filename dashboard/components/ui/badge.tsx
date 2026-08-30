@@ -29,14 +29,55 @@ export function Badge({ children, className, variant = "default" }: BadgeProps) 
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  const variant =
-    status === "ok" || status === "online" || status === "succeeded" || status === "indexed"
-      ? "success"
-      : status === "error" || status === "offline" || status === "failed" || status === "dead_letter"
-        ? "error"
-        : status === "warning" || status === "degraded" || status === "draining"
-          ? "warning"
-          : "default";
+  const variant = getStatusVariant(status);
+  return <Badge variant={variant}>{labelFor(status)}</Badge>;
+}
 
-  return <Badge variant={variant}>{status}</Badge>;
+export function getStatusVariant(status: string):
+  | "default"
+  | "success"
+  | "warning"
+  | "error"
+  | "info" {
+  if (
+    status === "ok" ||
+    status === "online" ||
+    status === "succeeded" ||
+    status === "indexed" ||
+    status === "cloned"
+  )
+    return "success";
+  if (
+    status === "error" ||
+    status === "offline" ||
+    status === "failed" ||
+    status === "dead_letter"
+  )
+    return "error";
+  if (
+    status === "warning" ||
+    status === "degraded" ||
+    status === "draining"
+  )
+    return "warning";
+  if (
+    status === "queued" ||
+    status === "cloning" ||
+    status === "claimed" ||
+    status === "running" ||
+    status === "downloaded" ||
+    status === "extracted" ||
+    status === "discovered"
+  )
+    return "info";
+  return "default";
+}
+
+export function labelFor(status: string): string {
+  switch (status) {
+    case "cloning":
+      return "cloning…";
+    default:
+      return status;
+  }
 }

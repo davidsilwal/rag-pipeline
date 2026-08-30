@@ -12,13 +12,12 @@ import {
   AlertTriangle,
   RefreshCw,
   FileStack,
-  Layers,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
-import { Badge, StatusBadge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { useApi } from "@/lib/hooks";
 import { relativeTime, shortId, stageLabel } from "@/lib/utils";
-import { PIPELINE_STAGES, STAGE_COLORS } from "@/lib/types";
+import { PIPELINE_STAGES } from "@/lib/types";
 import type { Source, Task } from "@/lib/types";
 
 interface ProcessingJob {
@@ -43,62 +42,93 @@ export default function ProcessPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load recent sources to check which ones are being processed
-  const loadRecentSources = useCallback(async () => {
-    try {
-      const sources = await api.listSources({ limit: 50 });
-      setRecentSources(sources);
-    } catch {
-      // Ignore
-    }
+  const fetchRecentSources = useCallback(async () => {
+    return api.listSources({ limit: 50 });
   }, [api]);
 
-  // Load tasks for active sources
-  const loadJobs = useCallback(async () => {
+  const loadRecentSources = useCallback(async () => {
     try {
-      const sources = recentSources.filter(
-        (s) =>
-          s.status !== "indexed" &&
-          s.status !== "error" &&
-          s.status !== "quarantine",
-      );
-      const jobsList: ProcessingJob[] = [];
-      for (const src of sources) {
-        try {
-          const res = await api.listTasks({
-            limit: 20,
-          });
-          const allTasks = res.tasks || [];
-          const srcTasks = allTasks.filter(
-            (t: Task) => t.scope_id === src.source_id,
-          );
-          jobsList.push({
-            sourceId: src.source_id,
-            filePath: src.file_path,
-            fileName: src.file_name,
-            status: src.status,
-            tasks: srcTasks,
-            startedAt: src.created_at || "",
-          });
-        } catch {
-          // Skip
-        }
-      }
-      setJobs(jobsList);
+      setRecentSources(await fetchRecentSources());
     } catch {
       // Ignore
     }
-  }, [api, recentSources]);
+  }, [fetchRecentSources]);
+
+  // Load tasks for active sources
+  const fetchJobsFor = useCallback(async (sources: Source[]) => {
+    const jobsList: ProcessingJob[] = [];
+    for (const src of sources.filter(
+      (s) =>
+        s.status !== "indexed" &&
+        s.status !== "error" &&
+        s.status !== "quarantine",
+    )) {
+      try {
+        const res = await api.listTasks({
+          limit: 20,
+        });
+        const allTasks = res.tasks || [];
+        const srcTasks = allTasks.filter(
+          (t: Task) => t.scope_id === src.source_id,
+        );
+        jobsList.push({
+          sourceId: src.source_id,
+          filePath: src.file_path,
+          fileName: src.file_name,
+          status: src.status,
+          tasks: srcTasks,
+          startedAt: src.created_at || "",
+        });
+      } catch {
+        // Skip
+      }
+    }
+    return jobsList;
+  }, [api]);
+
+  const loadJobs = useCallback(async () => {
+    try {
+      setJobs(await fetchJobsFor(recentSources));
+    } catch {
+      // Ignore
+    }
+  }, [fetchJobsFor, recentSources]);
 
   // Initial load
   useEffect(() => {
-    loadRecentSources();
-  }, [loadRecentSources]);
+    let active = true;
+    (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      try {
+        const sources = await fetchRecentSources();
+        if (active) setRecentSources(sources);
+      } catch {
+        // Ignore
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [fetchRecentSources]);
 
   useEffect(() => {
-    if (recentSources.length > 0) {
-      loadJobs();
-    }
-  }, [recentSources, loadJobs]);
+    if (recentSources.length === 0) return;
+    let active = true;
+    (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      try {
+        const jobsList = await fetchJobsFor(recentSources);
+        if (active) setJobs(jobsList);
+      } catch {
+        // Ignore
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [fetchJobsFor, recentSources]);
 
   // Auto-poll while there are active jobs
   useEffect(() => {

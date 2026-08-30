@@ -230,3 +230,49 @@ async def text_batch(
         "combined_text": r["combined_text"] or "",
     } for r in rows]
 
+
+@router.get("/unembedded", summary="Fetch units not yet in embed_cache (paginated)")
+async def unembedded_units(
+    limit: int = Query(5000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
+    _token=None,
+):
+    """Return units whose content_hash is NOT in embed_cache.
+    This lets the worker embed many sources in one task instead of one-at-a-time."""
+    engine = get_engine()
+    async with engine.connect() as conn:
+        rows = (await conn.execute(
+            text("""
+                SELECT u.unit_id, u.doc_id AS source_id, u.content_hash, u.clean_text, u.unit_index
+                FROM units u
+                LEFT JOIN embed_cache ec ON ec.content_hash = u.content_hash
+                WHERE u.clean_text IS NOT NULL AND u.clean_text <> ''
+                  AND ec.content_hash IS NULL
+                ORDER BY u.doc_id, u.unit_index
+                LIMIT :lim OFFSET :off
+            """),
+            {"lim": limit, "off": offset},
+        )).mappings().all()
+        total_row = (await conn.execute(
+            text("""
+                SELECT count(*) AS n
+                FROM units u
+                LEFT JOIN embed_cache ec ON ec.content_hash = u.content_hash
+                WHERE u.clean_text IS NOT NULL AND u.clean_text <> ''
+                  AND ec.content_hash IS NULL
+            """),
+        )).first()
+    total = total_row[0] if total_row else 0
+    return {
+        "units": [{
+            "unit_id": str(r["unit_id"]),
+            "source_id": str(r["source_id"]),
+            "content_hash": r["content_hash"],
+            "clean_text": r["clean_text"],
+            "unit_index": r["unit_index"],
+        } for r in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    }
+

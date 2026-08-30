@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from database import get_engine
-from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system, export
+from routers import sources, units, wiki, search, jobs, workers, tasks, embed_cache, system, export, ingest, dedup, incremental, ask
 
 log = logging.getLogger("control-api")
 
@@ -148,6 +148,10 @@ app.include_router(tasks.router, prefix="/api/v1", tags=["tasks"])
 app.include_router(embed_cache.router, prefix="/api/v1", tags=["embed_cache"])
 app.include_router(system.router, prefix="/api/v1", tags=["system"])
 app.include_router(export.router, prefix="/api/v1", tags=["export"])
+app.include_router(ingest.router, prefix="/api/v1", tags=["ingest"])
+app.include_router(dedup.router, prefix="/api/v1", tags=["dedup"])
+app.include_router(incremental.router, prefix="/api/v1", tags=["incremental"])
+app.include_router(ask.router, prefix="/api/v1", tags=["ask"])
 
 
 # --- OpenAPI patch: global security so Swagger "Authorize" button appears ----

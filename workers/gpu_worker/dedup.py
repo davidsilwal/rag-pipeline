@@ -39,11 +39,17 @@ def _minhash(text: str, num_perm: int = 128) -> "MinHash | None":
 
 
 async def load_units_for_source(source_id: str) -> list[dict]:
+    """Load units for a source scope, or ALL units for the corpus scope."""
     pool = await get_pool()
-    rows = await pool.fetch(
-        "SELECT unit_id, content_hash, clean_text FROM units WHERE source_id = $1 ORDER BY unit_index",
-        source_id,
-    )
+    if not source_id or source_id == "corpus" or source_id.startswith("corpus"):
+        rows = await pool.fetch(
+            "SELECT unit_id, content_hash, clean_text FROM units ORDER BY created_at, unit_index"
+        )
+    else:
+        rows = await pool.fetch(
+            "SELECT unit_id, content_hash, clean_text FROM units WHERE source_id = $1 ORDER BY unit_index",
+            source_id,
+        )
     return [dict(r) for r in rows]
 
 

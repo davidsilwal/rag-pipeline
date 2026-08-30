@@ -26,15 +26,19 @@ export default function TasksPage() {
   const [status, setStatus] = useState("");
   const [requeuing, setRequeuing] = useState<string | null>(null);
 
+  const fetchTasksData = useCallback(async () => {
+    return api.listTasks({
+      stage: stage || undefined,
+      status: status || undefined,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+    });
+  }, [api, page, stage, status]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.listTasks({
-        stage: stage || undefined,
-        status: status || undefined,
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
-      });
+      const res = await fetchTasksData();
       setTasks(res.tasks);
       setTotal(res.total);
     } catch {
@@ -43,11 +47,31 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, page, stage, status]);
+  }, [fetchTasksData]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let active = true;
+    (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      setLoading(true);
+      try {
+        const res = await fetchTasksData();
+        if (!active) return;
+        setTasks(res.tasks);
+        setTotal(res.total);
+      } catch {
+        if (!active) return;
+        setTasks([]);
+        setTotal(0);
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [fetchTasksData]);
 
   const resetPage = () => setPage(0);
   const totalPages = Math.ceil(total / PAGE_SIZE);

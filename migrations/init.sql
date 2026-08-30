@@ -39,6 +39,10 @@ CREATE TABLE sources (
     leased_by TEXT,
     lease_token UUID,
     heartbeat_at TIMESTAMPTZ,
+    source_version INTEGER NOT NULL DEFAULT 1,
+    last_processed_at TIMESTAMPTZ,
+    last_processed_by VARCHAR(64),
+    processing_notes TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -64,12 +68,14 @@ CREATE TABLE units (
     content_hash CHAR(64) NOT NULL,
     disposition VARCHAR(32) NOT NULL DEFAULT 'authoritative',
     quality_score FLOAT DEFAULT 1.0,
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_id, unit_index)
 );
 CREATE INDEX idx_units_source_id ON units(source_id);
 CREATE INDEX idx_units_content_hash ON units(content_hash);
 CREATE INDEX idx_units_disposition ON units(disposition);
+CREATE INDEX idx_units_status ON units(status);
 CREATE INDEX idx_units_heading_path ON units USING GIN(heading_path);
 
 -- 4. Embedding Cache (BGE-M3 1024d Dense + Sparse Lexical Weights)
@@ -178,6 +184,18 @@ CREATE TABLE dedup_pairs (
     CHECK (kept_unit_id < suppressed_unit_id)
 );
 CREATE INDEX idx_dedup_suppressed ON dedup_pairs(suppressed_unit_id);
+
+-- 8c. Human Dedup Review Decisions
+CREATE TABLE dedup_reviews (
+    review_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    pair_id UUID NOT NULL UNIQUE REFERENCES dedup_pairs(pair_id) ON DELETE CASCADE,
+    reviewer TEXT NOT NULL,
+    decision VARCHAR(32) NOT NULL,
+    notes TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_dedup_reviews_decision ON dedup_reviews(decision);
 
 -- 9. Authoritative Wiki Pages (Git Reflection)
 CREATE TABLE wiki_pages (

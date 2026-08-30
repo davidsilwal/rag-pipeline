@@ -33,7 +33,10 @@ class Source(Base):
     lease_token = Column(UUID)
     heartbeat_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), default=func.now())
-    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+    source_version = Column(Integer, default=1, nullable=False)
+    last_processed_at = Column(DateTime(timezone=True))
+    last_processed_by = Column(String(64))
+    processing_notes = Column(Text)
 
     __table_args__ = (
         Index("idx_sources_sha256", "sha256_hash"),
@@ -60,6 +63,7 @@ class Unit(Base):
     content_hash = Column(String(64), nullable=False)
     disposition = Column(String(32), default="authoritative", nullable=False)
     quality_score = Column(Float, default=1.0)
+    status = Column(String(32), default="active", nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
 
     __table_args__ = (
@@ -67,6 +71,7 @@ class Unit(Base):
         Index("idx_units_source_id", "source_id"),
         Index("idx_units_content_hash", "content_hash"),
         Index("idx_units_disposition", "disposition"),
+        Index("idx_units_status", "status"),
         Index("idx_units_heading_path", "heading_path", postgresql_using="gin"),
     )
 
@@ -189,6 +194,19 @@ class DedupPair(Base):
         CheckConstraint("kept_unit_id < suppressed_unit_id", name="chk_pair_order"),
         Index("idx_dedup_suppressed", "suppressed_unit_id"),
     )
+
+
+class DedupReview(Base):
+    __tablename__ = "dedup_reviews"
+    review_id = Column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
+    pair_id = Column(UUID, ForeignKey("dedup_pairs.pair_id", ondelete="CASCADE"), unique=True, nullable=False)
+    reviewer = Column(Text, nullable=False)
+    decision = Column(String(32), nullable=False)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("idx_dedup_reviews_decision", "decision"),)
 
 
 class WikiPage(Base):

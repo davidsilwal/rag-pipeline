@@ -32,10 +32,11 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 # Plan §5 claim TTLs per stage (seconds).
 STAGE_TTLS = {
+    "clone": 20 * 60,
     "discover": 15 * 60,
     "extract": 15 * 60,
     "chunk": 15 * 60,
-    "embed": 10 * 60,
+    "embed": 30 * 60,
     "dedup": 10 * 60,
     "cluster": 60 * 60,
     "consensus": 20 * 60,
@@ -126,8 +127,8 @@ async def _claim_once(conn, worker_id: uuid.UUID, stages: list[str], max_tasks: 
     if not stages:
         return []
     STAGE_TTL_SECS = {
-        "discover": 900, "extract": 900, "chunk": 900,
-        "embed": 600, "dedup": 600,
+        "clone": 1200, "discover": 900, "extract": 900, "chunk": 900,
+        "embed": 1800, "dedup": 600,
         "cluster": 3600, "consensus": 1200, "graphrag": 1200, "compile": 1200,
     }
     # Pick candidates globally (lowest priority, oldest created_at) across the
@@ -183,6 +184,37 @@ async def _claim_once(conn, worker_id: uuid.UUID, stages: list[str], max_tasks: 
         if len(out) >= max_tasks:
             break
     return out
+
+
+@router.post("/{task_id}/heartbeat", summary="Extend task lease TTL")
+async def heartbeat(
+    task_id: uuid.UUID,
+    payload: HeartbeatRequest,
+    token: uuid.UUID | None = Depends(optional_worker_token),
+):
+    """Worker calls this periodically while a task runs to prevent lease expiry."""
+    engine = get_engine()
+    STAGE_TTL_SECS = {
+        "clone": 1200, "discover": 900, "extract": 900, "chunk": 900,
+        "embed": 1800, "dedup": 600,
+        "cluster": 3600, "consensus": 1200, "graphrag": 1200, "compile": 1200,
+    }
+    async with engine.begin() as conn:
+        row = (
+            await conn.execute(
+                text("""
+                    UPDATE task_queue
+                       SET lease_expires_at = now() + make_interval(secs => :ttl),
+                           updated_at = now()
+                     WHERE task_id = :id AND lease_token = :tok AND status = 'claimed'
+                    RETURNING stage
+                """),
+                {"id": task_id, "tok": payload.lease_token, "ttl": STAGE_TTL_SECS.get("embed", 600)},
+            )
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=409, detail="Stale or unknown lease")
+    return {"status": "extended"}
 
 
 @router.post("/{task_id}/complete", summary="Mark a task succeeded (token-guarded)")

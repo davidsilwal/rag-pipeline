@@ -19,15 +19,19 @@ export default function JobsPage() {
   const [status, setStatus] = useState("");
   const [stage, setStage] = useState("");
 
+  const fetchJobsData = useCallback(async () => {
+    return api.listJobs({
+      status: status || undefined,
+      stage: stage || undefined,
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+    });
+  }, [api, page, status, stage]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.listJobs({
-        status: status || undefined,
-        stage: stage || undefined,
-        limit: PAGE_SIZE,
-        offset: page * PAGE_SIZE,
-      });
+      const res = await fetchJobsData();
       setJobs(res.jobs);
       setTotal(res.total);
     } catch {
@@ -36,11 +40,31 @@ export default function JobsPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, page, status, stage]);
+  }, [fetchJobsData]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    let active = true;
+    (async () => {
+      await Promise.resolve();
+      if (!active) return;
+      setLoading(true);
+      try {
+        const res = await fetchJobsData();
+        if (!active) return;
+        setJobs(res.jobs);
+        setTotal(res.total);
+      } catch {
+        if (!active) return;
+        setJobs([]);
+        setTotal(0);
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [fetchJobsData]);
 
   // Reset to page 0 when filters change
   const resetPage = () => setPage(0);

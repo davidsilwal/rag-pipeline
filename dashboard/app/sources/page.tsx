@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FileStack, Trash2, RefreshCw, Eye } from "lucide-react";
+import { FileStack, Trash2, RefreshCw, Eye, Plus, GitBranch, Loader2, Check } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
-import { StatusBadge } from "@/components/ui/badge";
+import { StatusBadge, getStatusVariant } from "@/components/ui/badge";
+import { AddSourcePanel } from "@/components/sources/add-source-panel";
 import { useSources, useApi } from "@/lib/hooks";
 import { formatBytes, relativeTime, mimeIcon } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ const STATUS_OPTIONS = [
 export default function SourcesPage() {
   const [status, setStatus] = useState<string>("");
   const [limit, setLimit] = useState(50);
+  const [showAdd, setShowAdd] = useState(false);
   const { data: sources, mutate } = useSources(status || undefined, limit);
   const api = useApi();
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -50,6 +52,13 @@ export default function SourcesPage() {
           <span className="text-sm text-zinc-500">
             {sources?.length ?? 0} items
           </span>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+          >
+            <Plus className="h-4 w-4" />
+            Add source
+          </button>
         </div>
 
         {/* Filters */}
@@ -136,12 +145,22 @@ export default function SourcesPage() {
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
                         <span>{mimeIcon(s.mime_type)}</span>
-                        <Link
-                          href={`/sources/${s.source_id}`}
-                          className="font-medium text-indigo-600 hover:text-indigo-800 truncate max-w-xs"
-                        >
-                          {s.file_name}
-                        </Link>
+                        <div className="min-w-0">
+                          <Link
+                            href={`/sources/${s.source_id}`}
+                            className="font-medium text-indigo-600 hover:text-indigo-800 truncate max-w-xs block"
+                          >
+                            {s.file_name}
+                          </Link>
+                          {s.source_type === "github" &&
+                            Boolean(s.source_metadata?.is_repo_marker) && (
+                              <CloneProgress
+                                status={String(
+                                  s.source_metadata.clone_status || s.status || "",
+                                )}
+                              />
+                            )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-zinc-500 text-xs">
@@ -180,6 +199,50 @@ export default function SourcesPage() {
           </table>
         </div>
       </div>
+
+      {showAdd && (
+        <AddSourcePanel
+          onClose={() => setShowAdd(false)}
+          onAdded={() => {
+            setShowAdd(false);
+            mutate();
+          }}
+        />
+      )}
     </AppShell>
   );
+}
+
+function CloneProgress({ status }: { status: string }) {
+  const variant = getStatusVariant(status);
+  const label = status === "succeeded" ? "done" : status;
+  const busy = status === "queued" || status === "claimed" || status === "running";
+  return (
+    <span
+      className={`mt-0.5 flex items-center gap-1 text-[11px] ${variantToText(variant)}`}
+      title={`GitHub clone: ${status}`}
+    >
+      {status === "succeeded" || status === "indexed" ? (
+        <Check className="h-3 w-3" />
+      ) : busy ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <GitBranch className="h-3 w-3" />
+      )}
+      repo · {label}
+    </span>
+  );
+}
+
+function variantToText(v: ReturnType<typeof getStatusVariant>): string {
+  switch (v) {
+    case "success":
+      return "text-emerald-600";
+    case "error":
+      return "text-red-600";
+    case "warning":
+      return "text-amber-600";
+    default:
+      return "text-zinc-400";
+  }
 }
